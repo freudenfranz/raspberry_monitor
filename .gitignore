@@ -161,4 +161,32 @@ cython_debug/
 
 # VSCode
 .vscode/ 
-node_modules/.bin
+
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data / recordings
+recordings/
+storage/
+
+# Logs (project-specific paths, the *.log rule misses directories)
+logs/
+
+# Environment file (⚠️ currently .env IS in .gitignore but double-check it's not tracked)
+# .env  ← already present, good
+
+# Editor: Cursor
+.cursor/
+
+# TypeScript build output
+dist/
+*.js.map

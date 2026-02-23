@@ -1,3 +1,0 @@
-"""
-BirdsOS Features Package
-""" 
