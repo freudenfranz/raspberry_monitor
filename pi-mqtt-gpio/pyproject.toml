@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pi-mqtt-gpio"
-version = "0.1.0"
+version = "0.2.0"
 description = "Secure, async MQTT v5 gatekeeper and RPC client for Raspberry Pi GPIOs"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -15,16 +15,17 @@ authors = [
 dependencies = [
     "amqtt>=0.11",
     "paho-mqtt>=2.0",
+    "gpiozero>=2.0",
 ]
 
 [project.optional-dependencies]
 # These are ONLY needed on the Raspberry Pi
 hardware = [
-    "gpiozero>=2.0",
     "rpi-lgpio>=0.6",
 ]
 # These are ONLY needed for development/testing
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
+    "pytest-mock>=3.0",
 ]

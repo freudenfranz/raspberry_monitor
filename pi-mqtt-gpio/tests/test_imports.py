@@ -1,5 +1,7 @@
 """
 Phase 1 Tests: Verify package structure and module imports.
+Ensures that the core application modules can be imported without syntax errors,
+confirming correct package setup and path configuration.
 """
 
 def test_server_imports():

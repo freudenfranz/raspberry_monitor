@@ -190,3 +190,14 @@ logs/
 # TypeScript build output
 dist/
 *.js.map
+piMqttGpio/pyvenv.cfg
+piMqttGpio/bin/activate
+piMqttGpio/bin/activate.csh
+piMqttGpio/bin/activate.fish
+piMqttGpio/bin/Activate.ps1
+piMqttGpio/bin/pip
+piMqttGpio/bin/pip3
+piMqttGpio/bin/pip3.10
+piMqttGpio/bin/python
+piMqttGpio/bin/python3
+piMqttGpio/bin/python3.10

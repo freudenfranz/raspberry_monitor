@@ -122,55 +122,6 @@ This can be done global as in "one lock for all pin's" or "per resource/pin". Fo
 Our solution is a centralized, self-contained Python application that acts as the sole Gatekeeper and communication hub for all GPIO interactions.
 
 ### Architecture Diagram
-
-```mermaid
-graph TD
-    subgraph "Remote Clients (Anywhere)"
-        A["Python Controller App<br>(gpiozero-stub via MQTT v5 RPC)"]
-        B["Flutter Dashboard App<br>(MQTT Client)"]
-    end
-
-    subgraph "Raspberry Pi (Single Python Application)"
-        subgraph "Async World (Event Loop)"
-            C["Embedded MQTT Broker"]
-            G["Async Event Publisher"]
-        end
-        
-        subgraph "The Bridge"
-            H["Thread-Safe Command Queue<br>(queue.Queue)"]
-            I["Thread-Safe Event Queue<br>(asyncio.Queue)"]
-        end
-
-        subgraph "Sync World (Hardware)"
-            D["Single Hardware Worker Thread"]
-            E["GPIOzero Objects & Callbacks"]
-        end
-    end
-
-    subgraph "Linux Kernel Layer"
-        F["Linux GPIO Subsystem<br>(/dev/gpiochip) + Kernel Locks"]
-    end
-
-    A <--> C
-    B --> C
-    
-    C -->|"1. Places Command"| H
-    D -->|"2. Gets & Executes Command"| E
-    E -->|"3. Fires & Schedules Event"| I
-    G -->|"4. Gets & Publishes Event"| C
-    
-    E --> F
-
-    style A fill:#D0E0F0,stroke:#333,stroke-width:2px
-    style B fill:#D0E0F0,stroke:#333,stroke-width:2px
-    style C fill:#F0F8FF,stroke:#333,stroke-width:2px
-    style G fill:#F0F8FF,stroke:#333,stroke-width:1px,stroke-dasharray: 5 5
-    style H fill:#FFE4B5,stroke:#333,stroke-width:2px
-    style I fill:#FFE4B5,stroke:#333,stroke-width:2px
-    style D fill:#ADD8E6,stroke:#333,stroke-width:2px
-    style E fill:#F5F5F5,stroke:#555,stroke-width:2px
-    style F fill:#FFFACD,stroke:#333,stroke-width:2px
-```
 ```mermaid
 graph TD
     subgraph "Remote Clients (Anywhere)"
@@ -207,7 +158,7 @@ graph TD
     E -->|"3. Fires & Schedules Event"| I
     G -->|"4. Gets & Publishes Event"| C
     
-    style J fill:#FFD700,stroke:#333,stroke-width:2px
+    style J fill:#FFFF00,stroke:#333,stroke-width:2px
 ```
 
 ### Key Components:
@@ -275,10 +226,10 @@ This project follows a **Test-Driven Development (TDD)** approach. For each step
 - [X] Create a test checking wether importing this packages `pi_mqtt_gpio.server` and `pi_mqtt_gpio.client` works
 
 ### Phase 2: The Core Bridge (Sync/Async) `v0.2.0`
-- [ ] **Test (Inbound):** Mock `gpiozero.LED`. Instantiate `HardwareManager`. Put a mock command object onto the `Command Queue`. Assert that the worker thread correctly pulls it and calls `led.on()` exactly once.
-- [ ] **Test (Outbound):** Mock the `asyncio` event loop. Trigger a mock hardware event. Assert that `loop.call_soon_threadsafe()` is called and the event successfully arrives in the `Event Queue`.
-- [ ] **Implementation:** Write `server/hardware.py`. Implement the `HardwareManager` class, the `queue.Queue` for commands, the `asyncio.Queue` for events, and the single dedicated worker thread loop.
-- [ ] **Commit:** `feat: implement sync-async hardware bridge and worker thread (v0.2.0)`
+- [X] Implement `HardwareManager` to bridge asynchronous network traffic with synchronous hardware operations
+- [X] Implement the **Inbound Path**: A thread-safe `queue.Queue` and a dedicated worker thread to execute commands sequentially
+- [X] Implement the **Outbound Path**: An `asyncio.Queue` and `loop.call_soon_threadsafe` logic to push hardware interrupts back to the main loop
+- [X] Verify functionality with `tests/server/test_hardware.py` using `gpiozero`'s `MockFactory`
 
 ### Phase 3: Embedded Broker & RPC Decoding `v0.3.0`
 - [ ] **Test (RPC Router):** Pass a mock JSON payload (`{"device": "led1", "method": "on"}`) to the RPC handler. Assert it correctly identifies the target object and formats it for the `HardwareManager`'s Command Queue.
