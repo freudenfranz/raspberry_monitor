@@ -19,7 +19,8 @@ import functools # Will be used for partial function application in gpiozero cal
 
 # These imports will use the mocked gpiozero on non-Pi systems
 # and the real one on a Pi (due to pyproject.toml optional dependencies)
-from gpiozero import Device,LED, Button, Motor # Placeholder for device types
+from gpiozero import Device,LED, Button, Motor
+from pi_mqtt_gpio.server.models import DeviceStatePayload # Placeholder for device types
 # from gpiozero.pins.lgpio import LGPIONoSerial, LGPIOFactory # Will be used for factory setup
 
 
@@ -31,26 +32,25 @@ class HardwareManager:
     # This allows the worker thread to block on `get()` while the broker thread can continue to enqueue commands without blocking.
     inbound_command_queue: queue.Queue # queue for inbound commands (write: Async broker -> Sync writes)
     
-    # For events coming from hardware (e.g., button presses), we use an `asyncio.Queue` to allow the worker thread to safely enqueue events that the broker thread can consume and publish to MQTT.
-    outbound_event_queue: asyncio.Queue # queue for outbound events (read: Sync reads -> Async broker)
-    
     _worker_thread: threading.Thread | None # It can be a Thread object or None
     _worker_running: threading.Event
     
+    publish_callback: callable
     #TODO: should we limit the size of these queues to prevent memory issues? (e.g., maxsize=100) including errorhandling
     
     """
     Manages gpiozero devices and the bridge between asyncio and synchronous hardware operations.
     """
-    def __init__(self, async_loop: asyncio.BaseEventLoop):
+    def __init__(self, async_loop: asyncio.BaseEventLoop, publish_callback: callable):
         self.async_loop = async_loop
         self.devices: dict[str, Device] = {}
-        self.inboud_command_queue = queue.Queue()
-        self.outbound_event_queue = asyncio.Queue()
+        self.inbound_command_queue = queue.Queue()
         # Initialize a `threading.Thread` for the worker and a `threading.Event` to control its lifecycle
         self._worker_thread = None
         self._worker_running = threading.Event()
-    
+        self._publish_hardware_event = None # This will be set by the broker when it starts, allowing us to publish events from the worker thread
+        self._publish_callback = publish_callback
+
     def initialize_gpio_devices(self):
         """
         Loads configuration (from a future config file) and creates gpiozero device objects.
@@ -74,12 +74,12 @@ class HardwareManager:
         # Assign the partial function to gpiozero callbacks (e.g., button.when_pressed)
         
         if "button_27" in self.devices:
-            button = self.devices["button_27"]
+            button:Device = self.devices["button_27"]
             
             # Use functools.partial to create a callback that includes device_name and event_type
             # This allows our generic_event_handler to know which button and what event occurred
-            button.when_pressed = functools.partial(self.generic_event_handler, "button_27", "pressed")
-            button.when_released = functools.partial(self.generic_event_handler, "button_27", "released")
+            button.when_pressed = functools.partial(self.generic_event_handler, "button_27", button, event="pressed")
+            button.when_released = functools.partial(self.generic_event_handler, "button_27", button, event="released")
             logging.debug("Configured callbacks for button_27.")
         else:
             logging.warning("no device found. Callbacks not configured for it.")
@@ -108,7 +108,7 @@ class HardwareManager:
         # Join the worker thread to wait for its graceful termination
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_running.clear() # Signal the worker loop to stop
-            self.inboud_command_queue.put(None) # Sentinel value to unblock the worker if it's waiting
+            self.inbound_command_queue.put(None) # Sentinel value to unblock the worker if it's waiting
             self._worker_thread.join() # Wait for the worker thread to finish
             logging.info("Hardware worker thread stopped.")
         else:
@@ -129,7 +129,7 @@ class HardwareManager:
             logging.info("Hardware worker loop has started.")
             try:
                 # timeout as needed so is_set() can be checked regularly for shutdown. Adjust as necessary!
-                command = self.inboud_command_queue.get(timeout=0.1) 
+                command = self.inbound_command_queue.get(timeout=0.1) 
                 if command is None: # Sentinel value for shutdown
                     logging.info("Worker loop received shutdown signal. Unblocking...")
                     break
@@ -141,8 +141,9 @@ class HardwareManager:
                 logging.error(f"Error in hardware worker thread: {e}")
                 # TODO: What do we do with commands that resulted in an error?!
                 # 1. Inform the caller somehow, as they did not get what they wanted.
-                # 2. Acknowledge that the QUEUE now contains one less item that requires further work.
-                self.inboud_command_queue.task_done()   # Need to account for task if exception occurred while executing as well!
+            finally:
+                # Acknowledge that the QUEUE now contains one less item that requires further work.
+                self.inbound_command_queue.task_done()   # Need to account for task if exception occurred while executing as well!
 
         logging.info("Hardware worker loop has stopped.")
 
@@ -186,7 +187,7 @@ class HardwareManager:
             # TODO: publish RPC error response
             return error_msg
 
-    def generic_event_handler(self, device_name: str, event_type: str):
+    def generic_event_handler(self, device_name: str, device: Device, action: str):
         """
         This callback is assigned to gpiozero events. It runs in a separate thread.
         It safely enqueues the event payload onto the asyncio event_queue.
@@ -194,18 +195,14 @@ class HardwareManager:
         # Construct the event payload dictionary (device_name, event_type, timestamp)
         # Use `self.async_loop.call_soon_threadsafe` to safely put the event onto `self.event_queue`
         # Implement basic error handling for queueing failure
-        event_payload = {
-            "device": device_name,
-            "event_type": event_type,
-            "timestamp": time.time() # Add a timestamp for better logging/analysis
-        }
-        
+        event = DeviceStatePayload(device=device_name, event=action, value=device.value)
+
         # This is the 'magic': safely schedule a task on the main async loop from this worker thread
         try:
-            self.async_loop.call_soon_threadsafe(self.outbound_event_queue.put_nowait, event_payload)
-            logging.debug(f"Event enqueued: {event_payload}")
+            self.async_loop.call_soon_threadsafe(self.publish_callback, event)
+            logging.debug(f"Event published: {event.to_json()}")
         except Exception as e:
-            logging.error(f"Error enqueueing event from hardware thread: {e}")
+            logging.error(f"Error publishing event from hardware thread: {e}")
 
 
 # --- Main Application Runner Placeholder (for local testing during development) ---
@@ -221,9 +218,9 @@ async def run_hardware_manager_test():
     # Create an async task to consume events from the event_queue
     # Keep the event loop running
     # Ensure graceful shutdown on KeyboardInterrupt
-    pass
+    raise NotImplementedError("This is a placeholder for local testing of HardwareManager. It will be implemented in server/main.py.")
 
 if __name__ == "__main__":
     # Placeholder for running the test function directly
     # Ensure it uses asyncio.run()
-    pass
+    raise NotImplementedError("This is a placeholder for local testing of HardwareManager. It will be implemented in server/main.py.")
