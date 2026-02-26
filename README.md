@@ -233,8 +233,15 @@ This project follows a **Test-Driven Development (TDD)** approach. For each step
 
 ### Phase 3: Embedded Broker & RPC Decoding `v0.3.0`
 - [ ] **Test (RPC Router):** Pass a mock JSON payload (`{"device": "led1", "method": "on"}`) to the RPC handler. Assert it correctly identifies the target object and formats it for the `HardwareManager`'s Command Queue.
-- [ ] **Implementation:** Write `server/broker.py` to instantiate the `amqtt` broker inside an asyncio loop. Write `server/rpc_handler.py` to subscribe to the command topic, parse incoming JSON, and pass it to the bridge. Connect the `Event Queue` to publish outgoing messages.
-- [ ] **Commit:** `feat: embed amqtt broker and route rpc commands to hardware bridge (v0.3.0)`
+
+### Phase 3: Embedded Broker & RPC Decoding `v0.3.0`
+- [X] Embed `amqtt` broker and internal client for unified network management
+- [X] Implement the **Outbound Pipeline**: Translate `HardwareEvent` objects into MQTT messages via a background publisher loop
+
+#### Phase 3.1: Embedded Broker & RPC Decoding `v0.3.1`
+- [ ] Implement the **Inbound RPC Handler**: Decode incoming MQTT v5 Request/Response messages into `HardwareCommand` objects
+- [ ] Verify full network-to-hardware loop with `tests/server/test_rpc_handler.py`
+
 
 ### Phase 4: The Remote Client Stub `v0.4.0`
 - [ ] **Test (Stub Command):** Mock the `paho-mqtt` network layer. Call `remote_led.on()`. Assert that the stub generates a correct MQTT v5 JSON payload containing a unique correlation ID and response topic.
