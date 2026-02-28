@@ -1,0 +1,8 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2  # The official image (v2.x)
+    ports:
+      - "1883:1883"             # Standard Port
+      - "18883:18883"           # Your Test Port
+    volumes:
+      - ./mosquitto_config:/mosquitto/config # Map local config folder

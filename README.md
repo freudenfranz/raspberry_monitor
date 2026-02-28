@@ -218,12 +218,12 @@ pi-mqtt-gpio/
 
 ## Development Workplan & Roadmap
 
-This project follows a **Test-Driven Development (TDD)** approach. For each step, the tests are written *before* the implementation. Since this code interacts with hardware, the tests will heavily rely on mocking the `gpiozero` library so they can run on any development machine (not just a Raspberry Pi).
+This project follows a **Test-Driven Development (TDD)** approach. For each step, tests are written *before* the implementation. The architecture relies on mocking the `gpiozero` library (`MockFactory`) so development can happen on any machine.
 
 ### Phase 1: Project Skeleton & Tooling `v0.1.0`
 - [X] Create a virtual environment, project skeleton
-- [X] Create a python package including toml file installing core dependencies `amqtt`, `paho-mqtt` for raspberry only: `gpiozero`, `lgpio`, and for development: `pytest`
-- [X] Create a test checking wether importing this packages `pi_mqtt_gpio.server` and `pi_mqtt_gpio.client` works
+- [X] Create a python package including toml file installing core dependencies `paho-mqtt`, for raspberry only: `gpiozero`, `lgpio`, and for development: `pytest`
+- [X] Create a test checking whether importing the packages `pi_mqtt_gpio.server` and `pi_mqtt_gpio.client` works
 
 ### Phase 2: The Core Bridge (Sync/Async) `v0.2.0`
 - [X] Implement `HardwareManager` to bridge asynchronous network traffic with synchronous hardware operations
@@ -231,37 +231,44 @@ This project follows a **Test-Driven Development (TDD)** approach. For each step
 - [X] Implement the **Outbound Path**: An `asyncio.Queue` and `loop.call_soon_threadsafe` logic to push hardware interrupts back to the main loop
 - [X] Verify functionality with `tests/server/test_hardware.py` using `gpiozero`'s `MockFactory`
 
-### Phase 3: Embedded Broker & RPC Decoding `v0.3.0`
-- [ ] **Test (RPC Router):** Pass a mock JSON payload (`{"device": "led1", "method": "on"}`) to the RPC handler. Assert it correctly identifies the target object and formats it for the `HardwareManager`'s Command Queue.
+### 3. Network Layer: Mosquitto Integration & MQTT v5 `v0.3.2`
+To ensure industrial-grade stability and unlock native MQTT v5 features (specifically for RPC routing), the architecture has pivoted from an embedded Python broker to an external service model.
 
-### Phase 3: Embedded Broker & RPC Decoding `v0.3.0`
-- [X] Embed `amqtt` broker and internal client for unified network management
-- [X] Implement the **Outbound Pipeline**: Translate `HardwareEvent` objects into MQTT messages via a background publisher loop
+*   **Architecture:** The system now acts as a managed client connecting to an external **Mosquitto** broker (running via Docker or Systemd). This decoupling ensures the hardware logic remains stable even if the network layer reconnects.
+*   **Library Stack:** We utilize **`aiomqtt`**, a modern `asyncio`-native wrapper around `paho-mqtt`, replacing the previous `amqtt` dependency. This provides robust context-manager-based connection handling and automatic reconnection logic.
+*   **The `MQTTManager`:** This class serves as the central network controller. It:
+    1.  Maintains the persistent connection to the broker.
+    2.  Runs the **Outbound Pipeline**, a background loop that consumes `HardwareEvent` objects from the internal queue and publishes them to dynamically generated topics (e.g., `pi/devices/{device}/state`).
+    3.  Implements the **Gateway Pattern**, providing a thread-safe injection point (`publish_hardware_event`) for the Hardware Manager to submit data without knowing about the network topology.
+*   **Integration Strategy:** The system is verified using full integration tests against a live, containerized Mosquitto instance, ensuring that payload serialization, topic generation, and MQTT v5 protocol negotiation function correctly in a real-world environment.
 
-#### Phase 3.1: Embedded Broker & RPC Decoding `v0.3.1`
-- [ ] Implement the **Inbound RPC Handler**: Decode incoming MQTT v5 Request/Response messages into `HardwareCommand` objects
-- [ ] Verify full network-to-hardware loop with `tests/server/test_rpc_handler.py`
+### Phase 4: Telemetry & Dashboard Integration (The "Erfolgserlebnis") `v0.4.0`
+*Goal: Achieve an end-to-end "Read-Only" visual win by feeding live data to a Flutter UI.*
+- [ ] **Internal Simulation:** Add a temporary "Heartbeat" or "Blinker" logic within `HardwareManager` to generate real-time events without needing external hardware triggers.
+- [ ] **System Telemetry:** Expand `models.py` to include basic System Monitoring payloads (e.g., CPU temp, Uptime) and broadcast them alongside GPIO events.
+- [ ] **Flutter Dashboard (v1):** Build the initial Flutter UI to connect to Mosquitto, subscribe to the state topics, and visualize the live data stream.
 
+### Phase 5: Inbound RPC & Remote Control (Real MQTT v5) `v0.5.0`
+*Goal: Close the loop by allowing the dashboard to send commands back to the hardware.*
+- [ ] **v5 Protocol Handler:** Implement `RPCProtocol` to decode incoming commands and route them using **native MQTT v5** `Response Topic` and `Correlation Data` properties (no JSON hacks needed).
+- [ ] **Command Router:** Implement `RPCHandler` to pass validated commands into the `HardwareManager`'s inbound queue.
+- [ ] **Response Pipeline:** Ensure execution results are published back to the requesting client's inbox via v5 properties.
 
-### Phase 4: The Remote Client Stub `v0.4.0`
-- [ ] **Test (Stub Command):** Mock the `paho-mqtt` network layer. Call `remote_led.on()`. Assert that the stub generates a correct MQTT v5 JSON payload containing a unique correlation ID and response topic.
-- [ ] **Implementation:** Write `client/connection.py` (handling the MQTT v5 connection and response correlation) and `client/devices.py` (creating the `RemoteLED` wrapper that mimics `gpiozero` syntax).
-- [ ] **Commit:** `feat: create python client stub with mqtt v5 rpc capabilities (v0.4.0)`
+### Phase 6: The Remote Client Stub `v0.6.0`
+*Goal: Provide a seamless Python developer experience for remote machines and local scripts.*
+- [ ] **Client Connection:** Write `client/connection.py` to handle MQTT v5 connections and manage pending RPC correlation IDs.
+- [ ] **Device Stubs:** Write `client/devices.py` (e.g., `RemoteLED`) to translate object-oriented property changes (`led.on()`) into network RPC payloads.
 
-### Phase 5: Security Layer (Authentication) `v0.5.0`
-- [ ] **Test (Auth Logic):** Write unit tests for the Authenticator class. Pass valid credentials -> assert `True`. Pass invalid credentials -> assert `False`.
-- [ ] **Implementation:** Write the custom `amqtt` Authenticator plugin in `server/security.py`. Hardcode a hashed password for MVP testing. Inject this plugin into the broker configuration.
-- [ ] **Commit:** `feat: implement embedded broker authentication plugin (v0.5.0)`
+### Phase 7: Service Management & Persistence `v0.7.0`
+*Goal: Allow the system to run autonomously.*
+- [ ] **Configuration File:** Implement loading of hardware definitions (pins, device types) from a `config.yaml` file at startup.
+- [ ] **System Service:** Create `systemd` unit files to run the Gatekeeper as a background daemon on the Raspberry Pi.
 
-### Phase 6: Operational Safety (Control Leases) `v0.6.0`
-- [ ] **Test (Lease Grant):** Request lease -> assert granted. 
-- [ ] **Test (Lease Denial):** Client A holds lease. Client B requests lease -> assert denied.
-- [ ] **Test (Lease Timeout):** Client A holds lease. Fast-forward mock time by 60 seconds. Assert lease is revoked and safety hardware shutdown commands are placed in the `Command Queue`.
-- [ ] **Implementation:** Implement `ControlLeaseManager` in `server/security.py`. Intercept all inbound RPC write commands in `rpc_handler.py` and verify the sender holds the lease before placing the command in the queue.
-- [ ] **Commit:** `feat: implement control lease manager to prevent multiple writers (v0.6.0)`
+### Phase 8: Operational Safety & Security `v0.8.0`
+*Goal: Make the system safe for the real world.*
+- [ ] **Control Leases:** Implement `ControlLeaseManager` to prevent multiple writers from sending conflicting commands concurrently.
+- [ ] **Mosquitto Security:** Document and configure Mosquitto's native Authentication and Access Control Lists (ACLs).
 
-### Phase 7: Configuration & Packaging (MVP Release) `v1.0.0`
-- [ ] **Test (Config Loading):** Provide a mock `config.yaml` file (containing pin definitions and hashed passwords). Assert the server parses it correctly and initializes the correct `gpiozero` objects.
-- [ ] **Implementation:** Add a configuration parser (e.g., using `PyYAML` or `toml`). Create the `main.py` entry point so the server can be started via a CLI command (e.g., `pi-mqtt-gatekeeper --config /etc/pi-mqtt.yaml`).
-- [ ] **Commit:** `feat: add configuration file parsing and CLI entry point (v1.0.0)`
-
+### Phase 9: Architecture V2 (Future Refactoring) `v1.0.0`
+*Goal: Upgrade internals based on real-world learnings.*
+- [ ] **Meta-Programming:** Refactor `HardwareManager` to dynamically bind to all `EventsMixin` properties instead of hardcoding callbacks.

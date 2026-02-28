@@ -11,7 +11,7 @@ import time
 
 # --- Base Classes (The "Blueprints") ---
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True) 
 class BasePayload:
     """Base class for all JSON payloads sent over MQTT."""
     timestamp: int = field(default_factory=time.time_ns)
@@ -65,14 +65,5 @@ class MQTTMessage:
     retain: bool = False
     
     # MQTT v5 Properties
-    #response_topic: Optional[str] = None
-    #correlation_data: Optional[bytes] = None
-
-    def to_publish_args(self) -> Dict[str, Any]:
-        """Converts the MQTTMessage to a dict of arguments for amqtt's publish method."""
-        return asdict(self)
-        # TODO: Check if these arguments are actually supported by the version of amqtt we're using!
-        #if self.response_topic:
-        #   args["response_topic"] = self.response_topic
-        #if self.correlation_data:
-        #   args["correlation_data"] = self.correlation_data
+    response_topic: Optional[str] = None
+    correlation_data: Optional[bytes] = None

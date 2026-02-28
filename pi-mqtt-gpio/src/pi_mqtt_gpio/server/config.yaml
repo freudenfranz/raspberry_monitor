@@ -1,0 +1,22 @@
+# config.yaml
+
+# 1. Network Configuration
+mqtt:
+  host: "localhost"
+  port: 1883
+  client_id: "pi-gatekeeper"
+  # username: "myuser"  <-- To be added in Phase 8
+  # password: "mypassword"
+  topic_pattern: "pi/devices/{device}/state"
+  status_topic: "pi/status"
+
+# 2. Hardware Configuration (The prelude to Phase 4!)
+# This is what your HardwareManager will eventually read.
+devices:
+  - name: "status_led"
+    pin: 17
+    type: "LED"
+    
+  - name: "trigger_button"
+    pin: 27
+    type: "Button"

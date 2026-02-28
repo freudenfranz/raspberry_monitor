@@ -8,7 +8,7 @@ def test_server_imports():
     """Assert that the server modules can be imported without syntax errors."""
     try:
         import pi_mqtt_gpio.server.main
-        import pi_mqtt_gpio.server.broker
+        import pi_mqtt_gpio.server.mqtt
         import pi_mqtt_gpio.server.hardware
         import pi_mqtt_gpio.server.security
         import pi_mqtt_gpio.server.rpc_handler
