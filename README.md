@@ -123,42 +123,68 @@ Our solution is a centralized, self-contained Python application that acts as th
 
 ### Architecture Diagram
 ```mermaid
-graph TD
-    subgraph "Remote Clients (Anywhere)"
-        A["Python Controller App<br>(gpiozero-stub via MQTT v5 RPC)"]
-        B["Flutter Dashboard App<br>(MQTT Client)"]
-    end
+flowchart TB
+ subgraph Clients["Remote Clients (External)"]
+        A["<b>Flutter Dashboard</b><br>(MQTT Client)<br><i>Sub: pi/devices/#</i>"]
+        B["<b>Python Script Stub</b><br>(RPC Client)<br><i>Pub: pi/devices/+/set</i>"]
+  end
+ subgraph Infrastructure["Infrastructure (Docker/Systemd)"]
+        Mosquitto[("<b>Mosquitto Broker</b><br>(MQTT v5)<br>Port 1883")]
+  end
+ subgraph AsyncWorld["Async World (Main Thread)"]
+        MQTTManager["<b>MQTTManager</b><br>(aiomqtt Client)"]
+        RPCHandler["<b>RPCHandler</b><br>(Decodes JSON)"]
+        Publisher["<b>Publisher Task</b><br>(Encodes JSON)"]
+  end
+ subgraph TheBridge["The Sync/Async Bridge"]
+        CommandQueue[/"<b>Command Queue</b><br>HWManager blocks until arrival of new command, then executes it. Meanwhile incoming commands have to wait. Order stays intact.<br><br>(queue.Queue)<br><i>Thread-Safe, Blocking</i>"/]
+        EventQueue[/"<b>Event Queue</b><br>HWManager pushes method for main thread to execute and continues nonblocking. Main thread schedules method for execution<br><br>(asyncio.Queue)<br><i>Awaitable</i>"/]
+  end
+ subgraph SyncWorld["Sync World (Worker Thread)"]
+        Worker["<b>HardwareManager</b>"]
+        GPIO["<b>gpiozero library</b><br>LED(), Button()"]
+  end
+ subgraph Gatekeeper["Raspberry Pi Gatekeeper (Python App)"]
+        AsyncWorld
+        TheBridge
+        SyncWorld
+  end
+ subgraph Hardware["Physical Layer"]
+        Kernel@{ label: "<b>Linux Kernel</b><br>lgpio / '/dev/gpiochip'" }
+  end
+    A <== MQTTS / TCP ==> Mosquitto
+    B <== MQTTS / TCP ==> Mosquitto
+    Mosquitto <== MQTTS / TCP ==> MQTTManager
+    MQTTManager -- "1. Incoming<br>MQTT Msg" --> RPCHandler
+    RPCHandler -- "2. Add command to queue<br>put_nowait()" --> CommandQueue
+    CommandQueue -- "3. get() <br> (Blocks)" --> Worker
+    Worker -- "4. Generic<br>gpiozero method<br>method_to_call()" --> GPIO
+    GPIO -. "5. Interrupt<br>(Callback)" .-> Worker
+    Worker -. "6. call_soon_threadsafe<br>(put_nowait)" .-> EventQueue
+    EventQueue -. "7. await get()" .-> Publisher
+    Publisher -- "8. client.publish()" --> MQTTManager
+    GPIO -- <b>Exclusive Lock</b> --> Kernel
 
-    subgraph "Raspberry Pi (Single Python Application)"
-        subgraph "Async World (Event Loop)"
-            subgraph "Embedded MQTT Broker"
-                C["Topic Routing & State Cache"]
-                J["Authenticator Plugin"]
-            end
-            G["Async Event Publisher"]
-        end
-        
-        subgraph "The Bridge"
-            H["Thread-Safe Command Queue"]
-            I["Thread-Safe Event Queue"]
-        end
-
-        subgraph "Sync World (Hardware)"
-            D["Single Hardware Worker Thread"]
-            E["GPIOzero Objects & Callbacks"]
-        end
-    end
-
-    A -- "MQTTS<br>(Username/Password)" --> J
-    B -- "MQTTS<br>(Username/Password)" --> J
-    J <--> C
-
-    C -->|"1. Places Command"| H
-    D -->|"2. Gets & Executes Command"| E
-    E -->|"3. Fires & Schedules Event"| I
-    G -->|"4. Gets & Publishes Event"| C
-    
-    style J fill:#FFFF00,stroke:#333,stroke-width:2px
+    Kernel@{ shape: rect}
+     A:::client
+     B:::client
+     Mosquitto:::broker
+     MQTTManager:::async
+     RPCHandler:::async
+     Publisher:::async
+     CommandQueue:::bridge
+     EventQueue:::bridge
+     Worker:::sync
+     GPIO:::sync
+     Kernel:::kernel
+    classDef client fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1
+    classDef broker fill:#FFF9C4,stroke:#FBC02D,stroke-width:3px,color:#000
+    classDef async fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20
+    classDef bridge fill:#F3E5F5,stroke:#8E24AA,stroke-width:2px,stroke-dasharray: 5 5,color:#4A148C
+    classDef sync fill:#FFEBEE,stroke:#C62828,stroke-width:2px,color:#B71C1C
+    classDef kernel fill:#ECEFF1,stroke:#455A64,stroke-width:2px,color:#000
+    style A fill:#E3F2FD
+    style Mosquitto fill:#FFF9C4
 ```
 
 ### Key Components:
@@ -214,7 +240,123 @@ pi-mqtt-gpio/
     └── [ ] test_client_stub.py
 ```
 
+## MQTT API & Topic Architecture
+
+This system uses a strict MQTT topic hierarchy to separate **Monitoring** (reading data) from **Remote Procedure Calls** (writing data). This ensures that thousands of clients can monitor the hardware simultaneously with zero performance impact on the Raspberry Pi, while execution commands are routed through a secure, single-file chokepoint.
+
+### Retained vs. Ephemeral Messages
+*   **Retained (State):** Messages that represent a persistent state (e.g., "The LED is ON"). The Mosquitto broker saves the last message sent to this topic. When a new dashboard connects, it instantly receives this cached state without having to query the hardware.
+*   **Ephemeral (Action):** Messages that represent a momentary action or intent (e.g., "Turn the LED ON"). These are not retained. If a client connects *after* the command was sent, it will not see it (preventing stale commands from firing after a reboot).
+
+### The System Actors (Use Cases)
+Before exploring the specific routing channels, it is helpful to understand the four primary entities interacting within this architecture:
+
+1.  **The Gatekeeper Daemon (Hardware Owner):** The central Python application running on the Raspberry Pi. It is the *only* program that holds the Linux kernel locks for the physical GPIO pins. It listens for intents, executes them safely, and broadcasts the resulting physical facts.
+2.  **Monitoring Clients (Read-Only):** External applications (like a web dashboard or mobile app) that only need to observe the system. They subscribe to state and telemetry topics to display real-time data without ever sending commands or impacting the Pi's processing overhead.
+3.  **Remote RPC Clients (Remote Control):** Scripts or applications running on other machines on the network. They send specific execution intents (Remote Procedure Calls) to the Gatekeeper to actuate hardware, and wait on a private channel for a success/error response.
+4.  **Local Python Scripts (Drop-in Replacement):** Companion scripts running on the *same* Raspberry Pi. Because the Gatekeeper holds the hardware locks, these local scripts cannot use raw `gpiozero` directly. Instead, they use a network-aware client stub to route their commands through the local `localhost` broker to the Gatekeeper, functioning identically to Remote RPC Clients but bypassing the "Resource Busy" hardware conflict.
+
+### 1. The Topic Directory
+
+#### A. System Health & Discovery (Retained: `True`)
+| Topic | Payload Format | Purpose |
+| :--- | :--- | :--- |
+| `pi/status` | `String` ("online" / "offline") | Powered by the broker's Last Will and Testament (LWT). Tells clients if the Gatekeeper daemon unexpectedly crashed or lost power. |
+| `pi/system/telemetry` | `JSON` | Hardware health metrics published periodically (e.g., CPU temperature, RAM usage, Uptime). |
+| `pi/devices/registry` | `JSON` | Published once on startup. A master list of all configured devices (e.g., `{"status_led": {"type": "LED", "pin": 17}}`). Dashboards use this to automatically build their user interface. |
+| `pi/devices/{device_name}/state` | `JSON` (`DeviceStatePayload`) | The live physical state of a specific device. Pushed immediately upon hardware interrupt (e.g., button pressed) or property change. |
+
+#### B. Remote Procedure Calls (Retained: `False`)
+| Topic | Payload Format | Purpose |
+| :--- | :--- | :--- |
+| `pi/rpc/commands` | `JSON` (`RPCCommandPayload`) | The universal "Inbox" for the Gatekeeper. All remote clients and local substitute scripts send execution intents here. |
+| `pi/rpc/responses/{client_id}` | `JSON` (`RPCResponsePayload`) | The private "Outbox" for a specific client. The Gatekeeper sends execution results, errors, or lease denials back to the requester using this specific channel. |
+
+#### C. Telemetry & Audit Logs (Retained: `False`)
+To provide real-time debugging and auditing without cluttering the RPC channels, the system broadcasts a live stream of logs. Because MQTT is a message broker and not a database, these messages are **not retained**. Clients will only see logs generated while they are actively connected.
+
+| Topic | Payload Format | Purpose |
+| :--- | :--- | :--- |
+| `pi/logs/audit` | `JSON` | A human-readable trail of system actions. Logs when commands are successfully executed, when Control Leases are granted/revoked, and when Admin overrides occur. |
+| `pi/logs/system/{level}` | `JSON` (`LogPayload`) | A live mirror of the Gatekeeper's internal Python `logging` module. Levels include `debug`, `info`, `warning`, and `error`. Crucial for remote troubleshooting. |
 ---
+
+## Operational Safety & Concurrency
+
+Controlling physical hardware over a network introduces significant safety risks. To prevent hardware damage and ensure predictable execution, this system enforces several architectural rules.
+
+### 1. The "Single Source of Truth" Rule
+Remote clients do not "create" or "allocate" physical pins over the network. The hardware configuration is strictly defined by the Gatekeeper's local `config.yaml` file. 
+*(Future Roadmap: While dynamic device allocation over RPC may be added later, it will be strictly governed by configuration flags—e.g., marking critical infrastructure as `immutable: true` to prevent network users from altering physical setups).*
+
+### 2. Control Leases & The "One Writer" Rule
+While any authenticated client can *read* from `pi/devices/+/state`, writing to hardware is restricted. To prevent two clients from sending conflicting commands concurrently (e.g., Client A drives a motor Forward, Client B drives it Backward), the system uses a **Control Lease Manager**.
+
+*   **Requesting a Lease:** Before executing a sequence, a client must send an RPC command requesting a lease on a specific device (or the whole system). 
+*   **Enforcement:** If Client B attempts to send a command to a device currently leased by Client A, the Gatekeeper rejects the command and sends an `RPCResponsePayload` containing an "Access Denied" error.
+*   **Admin Override:** For emergency interventions, authenticated Admin users can send specialized RPC commands to forcefully break existing leases.
+
+### 3. Continuous Execution & Heartbeats
+To protect long-running remote scripts (e.g., a Python daemon running on a laptop orchestrating a 30-minute hardware sequence), leases must be protected against network drops, while still failing safe if the script crashes.
+
+*   **Lease Timeouts:** Leases are granted with a specific time-to-live (TTL). If the TTL expires, the Gatekeeper automatically revokes the lease and triggers a "Dead-Man's Switch" (e.g., stopping all motors) to return the hardware to a safe state.
+*   **Heartbeat Renewals:** To keep a lease active for a long-running program, the remote client must periodically send a lightweight "Heartbeat" RPC command to the Gatekeeper. As long as the heartbeat is received, the script's execution cannot be interrupted by other clients, and its state remains secure. If the remote script crashes, the heartbeats stop, the lease expires, and the Pi safely shuts down the operation.
+
+---
+
+### Data Flow & Architecture Diagram
+
+```mermaid
+graph TD
+    %% --- Styles ---
+    classDef monitor fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1
+    classDef rpc fill:#FFF3E0,stroke:#E65100,stroke-width:2px,color:#E65100
+    classDef local fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20
+    classDef gatekeeper fill:#FCE4EC,stroke:#C2185B,stroke-width:3px,color:#880E4F
+    classDef broker fill:#ECEFF1,stroke:#455A64,stroke-width:3px,color:#000
+    classDef topic fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,stroke-dasharray: 5 5,color:#000
+
+    %% --- Remote Layer ---
+    subgraph Remote ["Remote Clients (Network)"]
+        direction LR
+        Dashboard["<b>Dashboard</b><br>(Monitoring Client)"]:::monitor
+        RemoteScript["<b>Remote Python Script</b><br>(RPC Client)"]:::rpc
+    end
+
+    %% --- Network Hub Layer ---
+    %%subgraph Mosquitto ["Mosquitto Broker (The Router)"]
+        direction TB
+        T_Command(["Channel: <b>pi/rpc/commands</b><br><i>Type: JSON Intent | Retained: NO</i>"]):::topic
+        T_Response(["Channel: <b>pi/rpc/responses/{client_id}</b><br><i>Type: JSON Result | Retained: NO</i>"]):::topic
+        T_State(["Channel: <b>pi/devices/{device}/state</b><br><i>Type: JSON Fact | Retained: YES</i>"]):::topic
+        T_Status(["Channel: <b>pi/status</b><br><i>Type: String | Retained: YES</i>"]):::topic
+    %%end
+
+    %% --- Local Hardware Layer ---
+    subgraph Pi["Raspberry Pi (Localhost)"]
+        direction LR
+        LocalScript["<b>Local Python Script</b><br>(Drop-in Replacement)"]:::local
+        Gatekeeper["<b>Gatekeeper Daemon</b><br>(Hardware Owner)"]:::gatekeeper
+    end
+
+    %% --- Routing Connections ---
+    
+    %% RPC Flow (Intent -> Execution -> Response)
+    RemoteScript -->|"2. Publishes Command"| T_Command
+    LocalScript -->|"2. Publishes Command"| T_Command
+    T_Command -->|"Subscribes"| Gatekeeper
+    
+    Gatekeeper -->|"3. Publishes Result"| T_Response
+    T_Response -.->|"Subscribes (Private Inbox)"| RemoteScript
+    T_Response -.->|"Subscribes (Private Inbox)"| LocalScript
+
+    %% Monitoring Flow (Hardware -> Facts -> UI)
+    Gatekeeper -->|"1. Publishes Hardware Changes"| T_State
+    Gatekeeper -->|"Publishes Birth / LWT"| T_Status
+    
+    T_State -->|"Subscribes"| Dashboard
+    T_Status -->|"Subscribes"| Dashboard
+```
 
 ## Development Workplan & Roadmap
 
