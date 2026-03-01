@@ -9,6 +9,7 @@ mqtt:
   # password: "mypassword"
   topic_pattern: "pi/devices/{device}/state"
   status_topic: "pi/status"
+  telemetry_topic: "pi/system/telemetry"
 
 # 2. Hardware Configuration (The prelude to Phase 4!)
 # This is what your HardwareManager will eventually read.

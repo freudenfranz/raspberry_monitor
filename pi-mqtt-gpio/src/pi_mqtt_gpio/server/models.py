@@ -13,14 +13,16 @@ from enum import Enum
 class SystemStatus(str, Enum):
     RUNNING = "running"
     SHUTTING_DOWN = "shutting_down"
-    ERROR = "error" 
+    ERROR = "error"
+    ONLINE = "online"
+    OFFLINE = "offline"
 
 # --- Base Classes (The "Blueprints") ---
 
 @dataclass(frozen=True, kw_only=True) 
 class BasePayload:
     """Base class for all JSON payloads sent over MQTT."""
-    timestamp: int = field(default_factory=time.time_ns)
+    timestamp: float = field(default_factory=time.time) 
 
     def to_json(self) -> str:
         """Converts the object to a JSON string."""
@@ -33,12 +35,23 @@ class BasePayload:
 # --- The "Letters" (Content Variants) ---
 
 @dataclass(frozen=True, kw_only=True)
+class SystemStatusPayload(BasePayload):
+    """Payload representing the overall system's operational status."""    
+    status: SystemStatus = field(default=SystemStatus.ONLINE)
+    
+@dataclass(frozen=True, kw_only=True)
+class TelemetryPayload(BasePayload):
+    """Payload representing system health metrics."""
+    status: SystemStatus = field(default=SystemStatus.RUNNING)
+    cpu_temp: float = 0.0 # Optional, for future use
+    uptime: float = 0.0
+    
+@dataclass(frozen=True, kw_only=True)
 class DeviceStatePayload(BasePayload):
     """Payload representing a hardware event/monitoring update."""
     device: str
     event: str
     value: Any
-
 @dataclass(frozen=True, kw_only=True)
 class RPCCommandPayload(BasePayload):
     """Payload representing a command request from a client."""
@@ -54,13 +67,6 @@ class LogPayload(BasePayload):
     module: str
     message: str
 
-@dataclass(frozen=True, kw_only=True)
-class TelemetryPayload(BasePayload):
-    """Payload representing system health metrics."""
-    cpu_temp: float = 0.0 # Optional, for future use
-    uptime: float = 0.0
-    status: SystemStatus = SystemStatus.RUNNING # status can be "running", "shutting_down", "error", etc.
-    
 # --- The "Envelope" (The MQTT Context) ---
 
 @dataclass(frozen=True)
@@ -80,3 +86,15 @@ class MQTTMessage:
     # MQTT v5 Properties
     response_topic: Optional[str] = None
     correlation_data: Optional[bytes] = None
+
+    def to_aiomqtt_args(self) -> Dict[str, Any]:
+        """Returns dict suitable for client.publish(**args)"""
+        return {
+            "topic": self.topic,
+            "payload": self.message, # aiomqtt uses 'payload', not 'message'
+            "qos": self.qos,
+            "retain": self.retain,
+            # Handle v5 properties if they are set
+            **({'response_topic': self.response_topic} if self.response_topic else {}),
+            **({'correlation_data': self.correlation_data} if self.correlation_data else {}),
+        }

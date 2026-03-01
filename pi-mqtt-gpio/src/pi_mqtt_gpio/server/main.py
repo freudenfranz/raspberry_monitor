@@ -20,7 +20,7 @@ from typing import Dict, Any
 
 from pi_mqtt_gpio.server.config_loader import load_config
 from pi_mqtt_gpio.server.hardware import HardwareManager
-from pi_mqtt_gpio.server.models import SystemStatus, TelemetryPayload
+from pi_mqtt_gpio.server.models import DeviceStatePayload, SystemStatus, SystemStatusPayload, TelemetryPayload
 from pi_mqtt_gpio.server.mqtt import MQTTManager 
 
 def setup_logging():
@@ -68,8 +68,17 @@ async def shutdown(signal_name:str, loop:asyncio.BaseEventLoop, mqtt_manager:MQT
     logger.info(f"Received exit signal {signal_name}...")
     
     # Send the Graceful Shutdown message before we stop the MQTT manager!
-    goodbye_payload = TelemetryPayload(status=SystemStatus.SHUTTING_DOWN)
+    goodbye_payload = TelemetryPayload(status='shutting_down')
     mqtt_manager.publish_hardware_event(goodbye_payload)
+    logger.info(f"publishing shutdown message to telementry topic before stopping services...")
+    
+    # Also explicitly send the 'offline' status to the status topic, since the Last Will might not be delivered if MQTTManager is gracefully stopped.
+    offline_payload = SystemStatusPayload(status='offline')
+    # The topic should be pi/status as defined in your config
+    mqtt_manager.publish_hardware_event(offline_payload)
+    logger.info(f"publishing shutdown message to {mqtt_manager.status_topic} before stopping services...")
+    
+    await asyncio.sleep(0.1) # Give it a moment to publish before we tear down the broker
     
     # Stop MQTT Manager (Async)
     await mqtt_manager.stop()

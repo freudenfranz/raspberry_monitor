@@ -14,7 +14,7 @@ import json
 import logging
 import queue
 from typing import Optional
-from pi_mqtt_gpio.server.models import BasePayload, DeviceStatePayload, MQTTMessage, TelemetryPayload # Import our manager
+from pi_mqtt_gpio.server.models import BasePayload, DeviceStatePayload, MQTTMessage, SystemStatus, SystemStatusPayload, TelemetryPayload # Import our manager
 # from pi_mqtt_gpio.server.security import CustomAuthenticator # Will be imported in Phase 5
 from aiomqtt import Client as MQTTClient, ProtocolVersion, Will
 
@@ -31,7 +31,8 @@ class MQTTManager:
     password: Optional[str]
     client_id: str
     status_topic: str
-   
+    telemetry_topic: str
+    
     """
     Manages the lifecycle and configuration of the embedded AMQTT broker.
     """
@@ -50,6 +51,7 @@ class MQTTManager:
         self.username = mqtt_conf.get('username', None)
         self.password = mqtt_conf.get('password', None)
         self.status_topic = self.config.get('status_topic', 'pi/status')  # Last Will status
+        self.telemetry_topic = self.config.get('telemetry_topic', 'pi/system/telemetry') # Telemetry topic
 
         # Internal state
         self._main_task: Optional[asyncio.Task] = None
@@ -84,7 +86,7 @@ class MQTTManager:
          # If we crash, the broker sets pi/status = "offline" (retained)
         lastWill = Will(
             topic=self.status_topic,
-            payload=b"offline",
+            payload=SystemStatusPayload(status=SystemStatus.OFFLINE).to_bytes(), 
             qos=1,
             retain=True
         )
@@ -99,7 +101,7 @@ class MQTTManager:
                                         username=self.username,
                                         password=self.password,
                                         will=lastWill) as client:
-                    await client.publish(self.status_topic, payload=b"online", retain=True)
+                    await client.publish(self.status_topic, payload=SystemStatusPayload(status=SystemStatus.ONLINE).to_bytes(), retain=True)
                     logger.info(f"Connected to Mosquito Broker as {self.client_id}! Status: online")
 
                     
@@ -124,7 +126,9 @@ class MQTTManager:
                 topic:str = self.topic_template.format(device=event.device)
             elif isinstance(event, TelemetryPayload):
                 # This payload does NOT have a 'device' field
-                topic = "pi/system/telemetry" # Use a hardcoded topic
+                topic = self.telemetry_topic # Use the configured telemetry topic
+            elif isinstance(event, SystemStatusPayload):
+                topic = self.status_topic # Publish to the status topic defined in config
             else:
                 # Handle unknown payloads
                 continue
