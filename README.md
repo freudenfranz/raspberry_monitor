@@ -384,10 +384,21 @@ To ensure industrial-grade stability and unlock native MQTT v5 features (specifi
     3.  Implements the **Gateway Pattern**, providing a thread-safe injection point (`publish_hardware_event`) for the Hardware Manager to submit data without knowing about the network topology.
 *   **Integration Strategy:** The system is verified using full integration tests against a live, containerized Mosquitto instance, ensuring that payload serialization, topic generation, and MQTT v5 protocol negotiation function correctly in a real-world environment.
 
-### Phase 4: Telemetry & Dashboard Integration (The "Erfolgserlebnis") `v0.4.0`
-*Goal: Achieve an end-to-end "Read-Only" visual win by feeding live data to a Flutter UI.*
-- [ ] **Internal Simulation:** Add a temporary "Heartbeat" or "Blinker" logic within `HardwareManager` to generate real-time events without needing external hardware triggers.
-- [ ] **System Telemetry:** Expand `models.py` to include basic System Monitoring payloads (e.g., CPU temp, Uptime) and broadcast them alongside GPIO events.
+### 4. Telemetry & Application Orchestration `v0.4.0`
+This phase focused on bringing the individual server components together into a single, runnable application and establishing a live outbound data stream for monitoring.
+
+*   **Dynamic Configuration:** The system now reads its entire configuration from a `config.yaml` file. This includes MQTT broker connection details and a list of `gpiozero` devices to be managed. The `HardwareManager` dynamically instantiates these devices on startup, making the application hardware-agnostic and easily reconfigurable.
+*   **Platform-Aware Execution:** The main application entry point (`main.py`) now detects whether it is running on a Raspberry Pi or a development machine (like macOS or Windows). If not on a Pi, it automatically configures `gpiozero` to use its `MockFactory`, allowing the entire software stack to run in a simulated environment for testing and UI development without needing physical hardware.
+*   **Live System Telemetry:** A background `asyncio` task has been implemented to periodically gather and publish system health metrics (like uptime) to a dedicated `pi/system/telemetry` topic. This provides a constant "heartbeat" to verify that the application is running and responsive.
+*   **Service Orchestration:** The `main.py` module now acts as the central orchestrator, responsible for:
+    1.  Loading the configuration.
+    2.  Instantiating the `MQTTManager` and `HardwareManager`.
+    3.  Wiring them together using the "Gateway Pattern" (Inversion of Control).
+    4.  Starting all background tasks (MQTT connection, hardware worker thread, telemetry loop).
+    5.  Handling graceful shutdown on OS signals (e.g., Ctrl+C).
+*   **Verification:** The entire outbound pipeline—from telemetry generation to the `MQTTManager`'s publisher loop and the external Mosquitto broker—has been verified. A third-party MQTT client can successfully subscribe to the telemetry topics and receive a live data stream from the running application.
+
+### Phase 4.1:
 - [ ] **Flutter Dashboard (v1):** Build the initial Flutter UI to connect to Mosquitto, subscribe to the state topics, and visualize the live data stream.
 
 ### Phase 5: Inbound RPC & Remote Control (Real MQTT v5) `v0.5.0`

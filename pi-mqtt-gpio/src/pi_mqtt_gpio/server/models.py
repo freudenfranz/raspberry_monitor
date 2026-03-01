@@ -9,6 +9,12 @@ import json
 from typing import Any, Dict, List, Optional
 import time
 
+from enum import Enum
+class SystemStatus(str, Enum):
+    RUNNING = "running"
+    SHUTTING_DOWN = "shutting_down"
+    ERROR = "error" 
+
 # --- Base Classes (The "Blueprints") ---
 
 @dataclass(frozen=True, kw_only=True) 
@@ -48,6 +54,13 @@ class LogPayload(BasePayload):
     module: str
     message: str
 
+@dataclass(frozen=True, kw_only=True)
+class TelemetryPayload(BasePayload):
+    """Payload representing system health metrics."""
+    cpu_temp: float = 0.0 # Optional, for future use
+    uptime: float = 0.0
+    status: SystemStatus = SystemStatus.RUNNING # status can be "running", "shutting_down", "error", etc.
+    
 # --- The "Envelope" (The MQTT Context) ---
 
 @dataclass(frozen=True)

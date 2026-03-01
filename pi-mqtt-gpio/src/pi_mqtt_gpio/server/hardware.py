@@ -11,20 +11,28 @@ of the concurrency model. It is responsible for:
 - Dynamically executing hardware commands based on RPC requests.
 """
 import asyncio
-import logging
+import logging as log
 import queue
 import threading
-import time
 import functools # Will be used for partial function application in gpiozero callbacks
 
 # These imports will use the mocked gpiozero on non-Pi systems
 # and the real one on a Pi (due to pyproject.toml optional dependencies)
-from gpiozero import Device,LED, Button, Motor
+from gpiozero import Device, LED, Button, Motor
 from pi_mqtt_gpio.server.models import DeviceStatePayload # Placeholder for device types
 # from gpiozero.pins.lgpio import LGPIONoSerial, LGPIOFactory # Will be used for factory setup
 
+# Map string names to classes
+DEVICE_CLASSES = {
+    "LED": LED,
+    "Button": Button,
+    "Motor": Motor
+}
+
+logger = log.getLogger(__name__)
 
 class HardwareManager:
+    config: dict
     async_loop: asyncio.BaseEventLoop # reference to the main asyncio event loop
     devices: dict[str, Device] # instantiated gpiozero device objects
     
@@ -41,7 +49,8 @@ class HardwareManager:
     """
     Manages gpiozero devices and the bridge between asyncio and synchronous hardware operations.
     """
-    def __init__(self, async_loop: asyncio.BaseEventLoop, publish_callback: callable):
+    def __init__(self, async_loop: asyncio.BaseEventLoop, publish_callback: callable, config:dict):
+        self.config = config
         self.async_loop = async_loop
         self.devices: dict[str, Device] = {}
         self.inbound_command_queue = queue.Queue()
@@ -53,16 +62,34 @@ class HardwareManager:
 
     def initialize_gpio_devices(self):
         """
-        Loads configuration (from a future config file) and creates gpiozero device objects.
+        Loads configuration from a config file and creates gpiozero device objects.
         For MVP, hardcode a few devices (e.g., LED, Button) for testing.
         Ensure gpiozero's pin factory is set to LGPIOFactory on a real Pi,
         or relies on mocks in the test environment.
         """
-        # Placeholder for setting gpiozero's pin_factory
-        # Instantiate your hardcoded gpiozero devices and store them in self.devices
-        # TODO: Initialize devices based on configuration file or over MQTT in the future!
-        self.devices["led_17"] = LED(17)
-        self.devices["button_27"] = Button(27)
+        device_config = self.config.get("devices", [])
+
+        for dev_conf in device_config:
+            name = dev_conf.get("name")
+            pin = dev_conf.get("pin")
+            type_name = dev_conf.get("type")
+            
+            if not all([name, pin, type_name]):
+                logger.error(f"Invalid device config: {dev_conf}")
+                continue
+                
+            device_class = DEVICE_CLASSES.get(type_name)
+            if not device_class:
+                logger.error(f"Unknown device type: {type_name}")
+                continue
+                
+            try:
+                # Instantiate (e.g., LED(17))
+                # Note: This uses the factory set in conftest/main
+                self.devices[name] = device_class(pin)
+                logger.info(f"Initialized {name} ({type_name} on Pin {pin})")
+            except Exception as e:
+                logger.error(f"Failed to initialize {name}: {e}")
 
     def setup_gpio_callbacks(self):
         """
@@ -80,9 +107,9 @@ class HardwareManager:
             # This allows our generic_event_handler to know which button and what event occurred
             button.when_pressed = functools.partial(self.generic_event_handler, "button_27", button, event="pressed")
             button.when_released = functools.partial(self.generic_event_handler, "button_27", button, event="released")
-            logging.debug("Configured callbacks for button_27.")
+            logger.debug("Configured callbacks for button_27.")
         else:
-            logging.warning("no device found. Callbacks not configured for it.")
+            logger.warning("no device found. Callbacks not configured for it.")
 
     def start_worker_thread(self):
         """
@@ -95,9 +122,9 @@ class HardwareManager:
             self._worker_running.set() # Allow the worker loop to run
             self._worker_thread = threading.Thread(target=self._worker_loop, name="HardwareWorker", daemon=True )
             self._worker_thread.start()
-            logging.info("Hardware worker thread started.")
+            logger.info("Hardware worker thread started.")
         else:
-            logging.warning("Attempted to start worker thread, but it's already running.")
+            logger.warning("Attempted to start worker thread, but it's already running.")
 
     def stop_worker_thread(self):
         """
@@ -110,9 +137,9 @@ class HardwareManager:
             self._worker_running.clear() # Signal the worker loop to stop
             self.inbound_command_queue.put(None) # Sentinel value to unblock the worker if it's waiting
             self._worker_thread.join() # Wait for the worker thread to finish
-            logging.info("Hardware worker thread stopped.")
+            logger.info("Hardware worker thread stopped.")
         else:
-            logging.warning("Attempted to stop worker thread, but it was not running.")
+            logger.warning("Attempted to stop worker thread, but it was not running.")
 
     def _worker_loop(self):
         """
@@ -125,27 +152,34 @@ class HardwareManager:
         # Call `_execute_command` for actual hardware interaction
         # Implement basic error handling for command execution
         # Ensure `command_queue.task_done()` is called
+        logger.info("Hardware worker loop has started.")
+       
         while self._worker_running.is_set():
-            logging.info("Hardware worker loop has started.")
             try:
                 # timeout as needed so is_set() can be checked regularly for shutdown. Adjust as necessary!
                 command = self.inbound_command_queue.get(timeout=0.1) 
                 if command is None: # Sentinel value for shutdown
-                    logging.info("Worker loop received shutdown signal. Unblocking...")
+                    logger.info("Worker loop received shutdown signal. Unblocking...")
+                    self.inbound_command_queue.task_done()
                     break
-                self._execute_command(command)
+                try:
+                    self._execute_command(command)
+                except Exception as e:
+                    logger.error(f"Error executing command: {e}")
+                
+                # We successfully got a command, so we MUST mark it done,
+                # regardless of whether _execute_command succeeded or failed.
+                self.inbound_command_queue.task_done()
+
             except queue.Empty:
-            # No commands, just loop again to check _worker_running flag
+                # No commands, just loop again to check _worker_running flag
                 pass    
             except Exception as e:
-                logging.error(f"Error in hardware worker thread: {e}")
+                logger.error(f"Error in hardware worker thread: {e}")
                 # TODO: What do we do with commands that resulted in an error?!
                 # 1. Inform the caller somehow, as they did not get what they wanted.
-            finally:
-                # Acknowledge that the QUEUE now contains one less item that requires further work.
-                self.inbound_command_queue.task_done()   # Need to account for task if exception occurred while executing as well!
-
-        logging.info("Hardware worker loop has stopped.")
+            
+        logger.info("Hardware worker loop has stopped.")
 
     def _execute_command(self, command: dict):
         """
@@ -165,7 +199,7 @@ class HardwareManager:
         rpc_response_topic = command.get("rpc_response_topic") # For MQTT v5 RPC
         if device_name not in self.devices:
             error_msg = f"Device '{device_name}' not found."
-            logging.error(f"Error: {error_msg}")
+            logger.error(f"Error: {error_msg}")
             # TODO: publish RPC error response
             return error_msg
 
@@ -174,16 +208,16 @@ class HardwareManager:
         
         if method_to_call is None:
             error_msg = f"Method '{method_name}' not found on device '{device_name}'"
-            logging.error(f"Error: {error_msg}")
+            logger.error(f"Error: {error_msg}")
             # TODO: publish RPC error response
             return error_msg
         try:
-            logging.debug(f"Attempting to execute command {method_name} on device '{device_name}'  with args={args} kwargs={kwargs}")
+            logger.debug(f"Attempting to execute command {method_name} on device '{device_name}'  with args={args} kwargs={kwargs}")
             result = method_to_call(*args, **kwargs)
-            logging.debug(f"Command executed successfully. Result: {result}")
+            logger.debug(f"Command executed successfully. Result: {result}")
         except Exception as e:
             error_msg = f"Error executing command '{method_name}' on device '{device_name}': {e}"
-            logging.error(f"Error: {error_msg}")
+            logger.error(f"Error: {error_msg}")
             # TODO: publish RPC error response
             return error_msg
 
@@ -200,9 +234,9 @@ class HardwareManager:
         # This is the 'magic': safely schedule a task on the main async loop from this worker thread
         try:
             self.async_loop.call_soon_threadsafe(self.publish_callback, event)
-            logging.debug(f"Event published: {event.to_json()}")
+            logger.debug(f"Event published: {event.to_json()}")
         except Exception as e:
-            logging.error(f"Error publishing event from hardware thread: {e}")
+            logger.error(f"Error publishing event from hardware thread: {e}")
 
 
 # --- Main Application Runner Placeholder (for local testing during development) ---

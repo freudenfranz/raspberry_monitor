@@ -14,9 +14,11 @@ import json
 import logging
 import queue
 from typing import Optional
-from pi_mqtt_gpio.server.models import BasePayload, DeviceStatePayload, MQTTMessage # Import our manager
+from pi_mqtt_gpio.server.models import BasePayload, DeviceStatePayload, MQTTMessage, TelemetryPayload # Import our manager
 # from pi_mqtt_gpio.server.security import CustomAuthenticator # Will be imported in Phase 5
 from aiomqtt import Client as MQTTClient, ProtocolVersion, Will
+
+logger = logging.getLogger(__name__)
 
 class MQTTManager:
     event_queue: asyncio.Queue
@@ -56,7 +58,7 @@ class MQTTManager:
         """
         Launches the main MQTT loop in the background.
         """
-        logging.info(f"Starting MQTT Manager, connecting to {self.host}:{self.port}...")
+        logger.info(f"Starting MQTT Manager, connecting to {self.host}:{self.port}...")
         self._main_task = asyncio.create_task(self._main_loop())
 
     async def stop(self):
@@ -64,14 +66,14 @@ class MQTTManager:
         Cancels the main loop, which closes the connection.
         """
         if self._main_task:
-            logging.info("Stopping MQTT Manager...")
+            logger.info("Stopping MQTT Manager...")
             self._main_task.cancel()
             try:
                 await self._main_task
             except asyncio.CancelledError:
-                logging.info("MQTT Manager stopped gracefully.")
+                logger.info("MQTT Manager stopped gracefully.")
             except Exception as e:
-                logging.error(f"Error during MQTT stop: {e}")
+                logger.error(f"Error during MQTT stop: {e}")
     
     async def _main_loop(self):
         """
@@ -98,7 +100,7 @@ class MQTTManager:
                                         password=self.password,
                                         will=lastWill) as client:
                     await client.publish(self.status_topic, payload=b"online", retain=True)
-                    logging.info(f"Connected to Mosquito Broker as {self.client_id}! Status: online")
+                    logger.info(f"Connected to Mosquito Broker as {self.client_id}! Status: online")
 
                     
                     # We run the publisher loop INSIDE the connection context
@@ -108,7 +110,7 @@ class MQTTManager:
             except asyncio.CancelledError:
                 raise # Let the stop() method handle this
             except Exception as e:
-                logging.error(f"MQTT Connection lost: {e}. Retrying in 5s...")
+                logger.error(f"MQTT Connection lost: {e}. Retrying in 5s...")
                 await asyncio.sleep(5)
 
     async def _publisher_loop(self, client: MQTTClient):
@@ -116,16 +118,24 @@ class MQTTManager:
         while True:
             # 1. Wait for an item from the event_queue
             event: DeviceStatePayload = await self.event_queue.get()
+
+            if isinstance(event, DeviceStatePayload):
+                # 2. Extract data from the event dict
+                topic:str = self.topic_template.format(device=event.device)
+            elif isinstance(event, TelemetryPayload):
+                # This payload does NOT have a 'device' field
+                topic = "pi/system/telemetry" # Use a hardcoded topic
+            else:
+                # Handle unknown payloads
+                continue
             
-            # 2. Extract data from the event dict
-            topic:str = self.topic_template.format(device=event.device)
             # amqtt expects the payload to be raw bytes so we need to convert our dict to JSON and then encode it
             bytes_payload:bytes = event.to_bytes()
 
             # 3. Use amqtt to publish
             message = MQTTMessage(topic=topic, message=bytes_payload)
             await client.publish(topic=message.topic, payload=message.message)
-            logging.debug(f"Published event to topic '{topic}': {event.to_json()}") 
+            logger.debug(f"Published event to topic '{topic}': {event.to_json()}") 
 
             # 4. Mark as done
             self.event_queue.task_done()
@@ -133,15 +143,18 @@ class MQTTManager:
     def publish_hardware_event(self, payload: BasePayload):
         """   
         The public interface for sending any hardware fact or system log 
-        to the outside world.
+        to the outside world. This is part of our "Async/Sync Bridge" 
+        that allows the synchronous(!) HardwareManager to communicate with the async(!) MQTTManager.
+        
+        We are passing this as a callback to the HardwareManager, 
+        which will call it from its worker thread whenever it has an event to report.
+        Make sure to use async_loop.call_soon_threadsafe(self.publish_hardware_event, event)
         
         Accepts a high-level Payload object and places it in the 
         internal queue for the background loop to process.
-
-        Make sure to use async_loop.call_soon_threadsafe(self.publish_hardware_event, event)
         """
         # 1. Log that a publish request was received
-        logging.debug(f"Request to publish: {payload}")
+        logger.debug(f"Request to publish: {payload}")
     
         # 2. Put the payload into the queue
         # Make sure to use async_loop.call_soon_threadsafe(self.publish_hardware_event, event)
