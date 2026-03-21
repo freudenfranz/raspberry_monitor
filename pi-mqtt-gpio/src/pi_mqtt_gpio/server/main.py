@@ -21,7 +21,8 @@ from typing import Dict, Any
 from pi_mqtt_gpio.server.config_loader import load_config
 from pi_mqtt_gpio.server.hardware import HardwareManager
 from pi_mqtt_gpio.server.models import DeviceStatePayload, SystemStatus, SystemStatusPayload, TelemetryPayload
-from pi_mqtt_gpio.server.mqtt import MQTTManager 
+from pi_mqtt_gpio.server.mqtt import MQTTManager
+from pi_mqtt_gpio.server.telemetry import TelemetryMonitor 
 
 def setup_logging():
     """
@@ -36,41 +37,12 @@ def setup_logging():
 
 logger = logging.getLogger(__name__)
 
-async def system_telemetry_loop(mqtt_manager: MQTTManager):
-    """Background task for sending system health metrics."""
-    logger.info("System telemetry loop started.")
-    start_time = time.time()
-    
-    try:
-        while True:
-            # Gather system facts
-            current_uptime = time.time() - start_time
-            
-            # Create the payload
-            payload = TelemetryPayload(
-                uptime=current_uptime,
-                status=SystemStatus.RUNNING
-            )
-            
-            # Publish facts using the MQTTManager's Gateway
-            # Note: We do NOT need call_soon_threadsafe here, because this loop 
-            # is an async task running ON the same event loop as the broker!
-            mqtt_manager.publish_hardware_event(payload)
-            
-            # Sleep for 5 seconds
-            await asyncio.sleep(5)
-
-    except asyncio.CancelledError:
-        logger.info("System telemetry loop stopped.")
-
-async def shutdown(signal_name:str, loop:asyncio.BaseEventLoop, mqtt_manager:MQTTManager, hardware_manager:HardwareManager):
+async def shutdown(signal_name:str, loop:asyncio.BaseEventLoop, mqtt_manager:MQTTManager, hardware_manager:HardwareManager, telemetry_monitor:TelemetryMonitor):
     """Graceful shutdown handler."""
     logger.info(f"Received exit signal {signal_name}...")
     
-    # Send the Graceful Shutdown message before we stop the MQTT manager!
-    goodbye_payload = TelemetryPayload(status='shutting_down')
-    mqtt_manager.publish_hardware_event(goodbye_payload)
-    logger.info(f"publishing shutdown message to telementry topic before stopping services...")
+    #Ask Telemetry to say goodbye
+    telemetry_monitor.publish_shutdown_message()
     
     # Also explicitly send the 'offline' status to the status topic, since the Last Will might not be delivered if MQTTManager is gracefully stopped.
     offline_payload = SystemStatusPayload(status='offline')
@@ -80,6 +52,8 @@ async def shutdown(signal_name:str, loop:asyncio.BaseEventLoop, mqtt_manager:MQT
     
     await asyncio.sleep(0.1) # Give it a moment to publish before we tear down the broker
     
+    # Stop telemetry manager gracefully
+    await telemetry_monitor.stop() 
     # Stop MQTT Manager (Async)
     await mqtt_manager.stop()
     
@@ -123,15 +97,16 @@ async def main_application_runner():
     hardware_manager.start_worker_thread() # Starts the GPIO event loop in a separate thread
     await mqtt_manager.start() # Starts the MQTT loop in the background
 
-    # Start Telemetry Loop as a background task
-    telemetry_task = asyncio.create_task(system_telemetry_loop(mqtt_manager))
+    # Instantiate and start the Telemetry Monitor ---
+    telemetry_monitor = TelemetryMonitor(mqtt_manager=mqtt_manager, interval_seconds=5)
+    await telemetry_monitor.start()
 
     # Setup Signal Handlers for OS interrupts
     # This tells Python what to do when you press Ctrl+C in the terminal.
     for sig in (signal.SIGINT, signal.SIGTERM):
          loop.add_signal_handler(
              sig, 
-             lambda s=sig: asyncio.create_task(shutdown(s, loop, mqtt_manager, hardware_manager))
+             lambda s=sig: asyncio.create_task(shutdown(s, loop, mqtt_manager, hardware_manager, telemetry_monitor))
          )
 
     logger.info("Gatekeeper is fully operational. Press Ctrl+C to exit.")
