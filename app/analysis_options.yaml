@@ -1,0 +1,267 @@
+# This file is based on the strong foundation of flutter_lints, but with stricter
+# rules enabled to enforce Clean Architecture principles, modern Dart style,
+# and high code quality suitable for a professional showcase application.
+# It is enhanced with flutter_solid_lints to enforce architectural boundaries.
+
+# =========================================================================
+# Dart Formatter Configuration
+# =========================================================================
+line_length: 120
+
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  # =========================================================================
+  # Custom Lint Plugin Configuration
+  # =========================================================================
+  # This section activates custom linting packages.
+  plugins:
+    # Enables the framework that runs rules from packages like flutter_solid_lints.
+    - custom_lint
+
+  exclude:
+    - "**/*.g.dart"
+    - "**/*.freezed.dart"
+    - "build/**"
+
+  strong-mode:
+    # This is excellent. It enforces strict type safety, which is crucial for
+    # preventing runtime errors and is a core tenet of robust software design.
+    implicit-casts: false
+    implicit-dynamic: false
+
+linter:
+  rules:
+    # =========================================================================
+    # Error Rules - These were already well-configured.
+    # =========================================================================
+    avoid_relative_lib_imports: true
+    avoid_slow_async_io: true
+    avoid_types_as_parameter_names: true
+    cancel_subscriptions: true
+    close_sinks: true
+    # comment_references is disabled by default in flutter_lints, but true is better.
+    comment_references: true
+    control_flow_in_finally: true
+    empty_statements: true
+    hash_and_equals: true
+    # This rule is obsolete and has been removed in Dart 3.0.0.
+    # It's safe to delete this line.
+    # invariant_booleans: true
+    # This rule is obsolete and has been removed in Dart 3.0.0.
+    # iterable_contains_unrelated_type: true
+    # This rule is obsolete and has been removed in Dart 3.0.0.
+    # list_remove_unrelated_type: true
+    literal_only_boolean_expressions: true
+    no_adjacent_strings_in_list: true
+    no_duplicate_case_values: true
+    prefer_void_to_null: true
+    test_types_in_equals: true
+    throw_in_finally: true
+    unrelated_type_equality_checks: true
+    valid_regexps: true
+
+    # =========================================================================
+    # Style Rules - Enhanced for Cleanliness, Readability, and Safety.
+    # =========================================================================
+    always_declare_return_types: true
+    # Forcing new lines improves readability and reduces merge conflicts.
+    # always_put_control_body_on_new_line: false
+    always_put_control_body_on_new_line: true
+    # Putting required named parameters first is a standard convention.
+    # always_put_required_named_parameters_first: false
+    always_put_required_named_parameters_first: true
+    # This rule is obsolete and has been removed in Dart 3.0.0.
+    # always_require_non_null_named_parameters: false
+    annotate_overrides: true
+    # Disallowing `dynamic` forces explicit typing, improving safety.
+    # avoid_annotating_with_dynamic: false
+    avoid_annotating_with_dynamic: true
+    # Forcing specific exception types (`on Exception catch(e)`) prevents
+    # accidentally catching programming errors.
+    # avoid_catches_without_on_clauses: false
+    avoid_catches_without_on_clauses: true
+    # Catching base 'Error' types can hide critical programming failures.
+    # It's better to let them crash during development.
+    # avoid_catching_errors: false
+    avoid_catching_errors: true
+    # Encourages using top-level functions, which is more idiomatic in Dart
+    # than creating a class just to hold static members.
+    # avoid_classes_with_only_static_members: false
+    avoid_classes_with_only_static_members: true
+    avoid_double_and_int_checks: true
+    avoid_empty_else: true
+    avoid_field_initializers_in_const_classes: true
+    # `for-in` loops are generally more readable and work better with async/await.
+    # avoid_function_literals_in_foreach_calls: false
+    avoid_function_literals_in_foreach_calls: true
+    avoid_implementing_value_types: true # Default is true, explicit is good.
+    avoid_init_to_null: true
+    avoid_null_checks_in_equality_operators: true
+    # Positional booleans are unreadable at the call site (e.g., `myFunc(true, false)`).
+    # Using named parameters (`myFunc(showTitle: true, isEnabled: false)`) is better.
+    # avoid_positional_boolean_parameters: false
+    avoid_positional_boolean_parameters: true
+    avoid_private_typedef_functions: true # Default is true.
+    # Helps catch mistakes where a default value is unnecessarily provided.
+    # avoid_redundant_argument_values: false
+    avoid_redundant_argument_values: true
+    avoid_renaming_method_parameters: true # Default is true.
+    avoid_return_types_on_setters: true
+    # This rule is obsolete and has been removed in Dart 3.0.0.
+    # avoid_returning_null: false
+    # This rule is obsolete and has been removed in Dart 3.0.0.
+    # avoid_returning_null_for_future: false
+    avoid_returning_null_for_void: true # Default is true.
+    avoid_returning_this: true # Default is true.
+    avoid_setters_without_getters: true # Default is true.
+    avoid_shadowing_type_parameters: true
+    avoid_single_cascade_in_expression_statements: true
+    avoid_unnecessary_containers: true
+    avoid_unused_constructor_parameters: true # Default is true.
+    # `async void` functions are "fire and forget" and can swallow errors.
+    # `async Future<void>` is almost always safer.
+    # avoid_void_async: false
+    avoid_void_async: true
+    await_only_futures: true
+    camel_case_extensions: true
+    camel_case_types: true
+    cascade_invocations: true # Default is true.
+    # Enforces `const kMyConstant` for compile-time constants.
+    # constant_identifier_names: false
+    constant_identifier_names: true
+    curly_braces_in_flow_control_structures: true
+    directives_ordering: true
+    # Swallowing errors silently by having an empty catch block is dangerous.
+    # empty_catches: true
+    empty_catches: false
+    empty_constructor_bodies: true
+    file_names: true
+    flutter_style_todos: true
+    implementation_imports: true
+    join_return_with_assignment: true # Default is true.
+    leading_newlines_in_multiline_strings: true # Default is true.
+    library_names: true
+    library_prefixes: true
+    # No line length limit is messy. 80 is the default, but you can also
+    # create a custom analysis_options.yaml to set another value like 100 or 120.
+    lines_longer_than_80_chars: false
+    non_constant_identifier_names: true
+    # null_closures is disabled by default, but true helps catch null errors.
+    # null_closures: false
+    null_closures: true
+    # Modern Dart style prefers using `var` or `final` for locals when the
+    # type is obvious, reducing verbosity.
+    omit_local_variable_types: false
+    one_member_abstracts: true # Default is true.
+    # Enforces throwing proper Exception/Error objects.
+    # only_throw_errors: false
+    only_throw_errors: true
+    overridden_fields: true
+    package_names: true
+    package_prefixed_library_names: true
+    parameter_assignments: true # Default is true.
+    prefer_adjacent_string_concatenation: true
+    prefer_asserts_in_initializer_lists: true # Default is true.
+    prefer_collection_literals: true
+    prefer_conditional_assignment: true
+    prefer_const_constructors: true
+    prefer_const_constructors_in_immutables: true
+    prefer_const_declarations: true
+    prefer_const_literals_to_create_immutables: true
+    prefer_constructors_over_static_methods: true # Default is true.
+    prefer_contains: true
+    # This rule is obsolete and has been removed in Dart 3.0.0.
+    # prefer_equal_for_default_values: true
+    # Encourages concise one-line functions with `=>`.
+    # prefer_expression_function_bodies: false
+    prefer_expression_function_bodies: true
+    # Crucial for Clean Code. Enforces immutability for fields.
+    prefer_final_fields: true
+    prefer_final_in_for_each: true # Default is true.
+    # Crucial for Clean Code. Enforces immutability for local variables.
+    # prefer_final_locals: false
+    prefer_final_locals: true
+    prefer_for_elements_to_map_fromIterable: true
+    prefer_foreach: false # for-in loops are generally preferred.
+    prefer_function_declarations_over_variables: true # Default is true.
+    prefer_generic_function_type_aliases: true
+    prefer_if_elements_to_conditional_expressions: true # Default is true.
+    prefer_if_null_operators: true
+    prefer_initializing_formals: true
+    prefer_inlined_adds: true # Default is true.
+    prefer_int_literals: true # Default is true.
+    prefer_interpolation_to_compose_strings: true
+    prefer_is_empty: true
+    prefer_is_not_empty: true
+    prefer_is_not_operator: true # Default is true.
+    prefer_iterable_whereType: true
+    prefer_mixin: true # Default is true.
+    prefer_null_aware_operators: true
+    # `avoid_relative_lib_imports: true` is stricter and better for Clean Architecture.
+    # This rule is less important when the other is enabled.
+    prefer_relative_imports: false
+    prefer_single_quotes: true
+    prefer_spread_collections: true
+    prefer_typing_uninitialized_variables: true # Default is true.
+    # Encourages adding a message to deprecation annotations.
+    # provide_deprecation_message: false
+    provide_deprecation_message: true
+    # Essential for a professional/showcase project. Forces documentation
+    # on all public APIs (e.g., your Use Cases and Repository interfaces).
+    # public_member_api_docs: false
+    public_member_api_docs: true
+    recursive_getters: true
+    slash_for_doc_comments: true
+    sort_child_properties_last: true
+    sort_constructors_first: true # Helps with code consistency.
+    # Keeps your pubspec.yaml file clean and organized.
+    sort_pub_dependencies: false
+    sort_unnamed_constructors_first: true # Helps with code consistency.
+    # More explicit than `always_declare_return_types`. Good for library-like code.
+    # type_annotate_public_apis: false
+    type_annotate_public_apis: true
+    type_init_formals: true
+    # A critical rule to prevent "fire-and-forget" futures that might fail silently.
+    # unawaited_futures: false
+    unawaited_futures: true
+    unnecessary_await_in_return: true # This is the default from flutter_lints.
+    unnecessary_brace_in_string_interps: true
+    unnecessary_const: true
+    unnecessary_getters_setters: true # Default is true.
+    unnecessary_lambdas: true # Default is true.
+    unnecessary_new: true
+    unnecessary_null_aware_assignments: true
+    unnecessary_null_in_if_null_operators: true
+    unnecessary_overrides: true
+    unnecessary_parenthesis: true
+    unnecessary_statements: true
+    unnecessary_string_escapes: true
+    unnecessary_string_interpolations: true
+    unnecessary_this: true
+    use_full_hex_values_for_flutter_colors: true
+    use_function_type_syntax_for_parameters: true
+    use_rethrow_when_possible: true
+    # Using setters can hide side effects. Methods are more explicit.
+    # use_setters_to_change_properties: false
+    use_setters_to_change_properties: true
+    # Encourages using the more performant `StringBuffer` for repeated concatenation.
+    # use_string_buffers: false
+    use_string_buffers: true
+    use_to_and_as_if_applicable: true # Default is true.
+    void_checks: true
+# =========================================================================
+# flutter_solid_lints Configuration (Optional)
+# =========================================================================
+# The rules from flutter_solid_lints are enabled by default when the plugin
+# is active. You only need this section if you want to customize their
+# behavior, for example, to change the line limit for `avoid_large_files`.
+# For this project, the defaults are excellent.
+#
+# custom_lint:
+#   rules:
+#     - avoid_large_files:
+#         max_lines: 120 # Example of overriding the default
+#     - proper_module_imports: true # Explicitly keeping it on
+#     - avoid_returning_widgets: true
+#     - avoid_magic_numbers: true
