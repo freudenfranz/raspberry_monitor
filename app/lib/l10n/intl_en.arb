@@ -1,0 +1,87 @@
+{
+  "@@locale": "en",
+  "@@author": "Flutter Team",
+  "appTitle": "My App",
+  "loading": "Loading...",
+  "error": "Error",
+  "success": "Success",
+  "cancel": "Cancel",
+  "ok": "OK",
+  "close": "Close",
+  "back": "Back",
+  "next": "Next",
+  "previous": "Back",
+  "submit": "Submit",
+  "save": "Save",
+  "delete": "Delete",
+  "edit": "Edit",
+  "add": "Add",
+  "remove": "Remove",
+  "retry": "Retry",
+  "tryAgain": "Try again",
+  "somethingWentWrong": "Something went wrong",
+  "appFailedToStart": "App failed to start",
+  "appFailedToStartMessage": "An error occurred during initialization. Please try restarting the app.",
+  "restartApp": "Restart app",
+  "welcomeMessage": "Welcome to {appName}",
+  "@welcomeMessage": {
+    "description": "Welcome message on the home page",
+    "placeholders": {
+      "appName": {
+        "type": "String",
+        "example": "My App"
+      }
+    }
+  },
+  "chooseOption": "Choose an option to explore:",
+  "designSystemShowcase": "Design System Showcase",
+  "designSystemDescription": "Explore the design system components, colors, typography, and more.",
+  "mqttShowcase": "Test MQTT",
+  "mqttShowcaseDescription": "Explore how to use MQTT",
+  "appInformation": "App Information",
+  "appInfoDescription": "View app version, build information, and other details.",
+  "welcomeTitle": "Welcome to {appName}!",
+  "@welcomeTitle": {
+    "description": "Welcome message on the app info page",
+    "placeholders": {
+      "appName": {
+        "type": "String",
+        "example": "My App"
+      }
+    }
+  },
+  "appInfoShortDescription": "This is a Flutter fundamentals project created with Mason bricks and following Clean Architecture principles.",
+  "applicationInformation": "Application Information",
+  "version": "Version",
+  "buildSignature": "Build Signature",
+  "installerStore": "Installer Store",
+  "loadingAppInfo": "Loading app information...",
+  "includedFeatures": "Included Features",
+  "cleanArchitecture": "📱 Clean Architecture (ResoCoder pattern)",
+  "designSystem": "🎨 Custom design system with Material 3",
+  "internationalization": "🌍 Internationalization support (i18n)",
+  "dependencyInjection": "🔧 Dependency Injection with GetIt",
+  "stateManagement": "📦 State management with BLoC",
+  "testStructure": "🧪 Comprehensive test structure",
+  "errorHandling": "🎯 Error handling with Either pattern",
+  "localStorage": "💾 Local storage with SharedPreferences",
+  "languageSettings": "Language Settings",
+  "language": "Language / Sprache",
+  "english": "English",
+  "german": "German",
+  "sampleButton": "Sample Button",
+  "categoryName": "{category}",
+  "@categoryName": {
+    "description": "Display name for showcase category",
+    "placeholders": {
+      "category": {
+        "type": "String",
+        "example": "Colors"
+      }
+    }
+  },
+  "telemetryStatus": "Status",
+  "telemetryUptime": "Up time",
+  "telemetryCpuTemp": "CPU Temperature"
+
+}

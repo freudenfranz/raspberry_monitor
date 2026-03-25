@@ -1,0 +1,87 @@
+{
+  "@@locale": "de",
+  "@@author": "Flutter Team",
+  "appTitle": "Meine App",
+  "loading": "Laden...",
+  "error": "Fehler",
+  "success": "Erfolg",
+  "cancel": "Abbrechen",
+  "ok": "OK",
+  "close": "Schließen",
+  "back": "Zurück",
+  "next": "Weiter",
+  "previous": "Zurück",
+  "submit": "Senden",
+  "save": "Speichern",
+  "delete": "Löschen",
+  "edit": "Bearbeiten",
+  "add": "Hinzufügen",
+  "remove": "Entfernen",
+  "retry": "Erneut versuchen",
+  "tryAgain": "Erneut versuchen",
+  "somethingWentWrong": "Etwas ist schief gelaufen",
+  "appFailedToStart": "App konnte nicht gestartet werden",
+  "appFailedToStartMessage": "Während der Initialisierung ist ein Fehler aufgetreten. Bitte versuchen Sie, die App neu zu starten.",
+  "restartApp": "App neu starten",
+  "welcomeMessage": "Willkommen bei {appName}",
+  "@welcomeMessage": {
+    "description": "Willkommensnachricht auf der Startseite",
+    "placeholders": {
+      "appName": {
+        "type": "String",
+        "example": "Meine App"
+      }
+    }
+  },
+  "chooseOption": "Wählen Sie eine Option zum Erkunden:",
+  "designSystemShowcase": "Design-System-Präsentation",
+  "designSystemDescription": "Erkunden Sie die Design-System-Komponenten, Farben, Typografie und mehr.",
+  "mqttShowcase": "Test MQTT",
+  "mqttShowcaseDescription": "Sieh dir an wie du MQTT nutzen kannst",
+  "appInformation": "App-Informationen",
+  "appInfoDescription": "Sehen Sie App-Version, Build-Informationen und andere Details.",
+  "welcomeTitle": "Willkommen bei {appName}!",
+  "@welcomeTitle": {
+    "description": "Willkommensnachricht auf der App-Info-Seite",
+    "placeholders": {
+      "appName": {
+        "type": "String",
+        "example": "Meine App"
+      }
+    }
+  },
+  "appInfoShortDescription": "Dies ist ein Flutter-Grundlagenprojekt, das mit Mason-Ziegeln erstellt wurde und den Clean-Architecture-Prinzipien folgt.",
+  "applicationInformation": "Anwendungsinformationen",
+  "version": "Version",
+  "buildSignature": "Build-Signatur",
+  "installerStore": "Installer Store",
+  "loadingAppInfo": "App-Informationen werden geladen...",
+  "includedFeatures": "Enthaltene Funktionen",
+  "cleanArchitecture": "📱 Clean Architecture (ResoCoder-Muster)",
+  "designSystem": "🎨 benutzerdefiniertes Design-System mit Material 3",
+  "internationalization": "🌍 Internationalisierungsunterstützung (i18n)",
+  "dependencyInjection": "🔧 Dependency Injection mit GetIt",
+  "stateManagement": "📦 State Management mit BLoC",
+  "testStructure": "🧪 Umfassende Teststruktur",
+  "errorHandling": "🎯 Fehlerbehandlung mit Either-Muster",
+  "localStorage": "💾 Lokale Speicherung mit SharedPreferences",
+  "languageSettings": "Spracheinstellungen",
+  "language": "Sprache / Language",
+  "english": "English",
+  "german": "Deutsch",
+  "sampleButton": "Beispiel-Schaltfläche",
+  "categoryName": "{category}",
+  "@categoryName": {
+    "description": "Display name for showcase category",
+    "placeholders": {
+      "category": {
+        "type": "String",
+        "example": "Colors"
+      }
+    }
+  },
+  "telemetryStatus": "Status",
+  "telemetryUptime": "Up time",
+  "telemetryCpuTemp": "CPU Temperatur"
+
+}
