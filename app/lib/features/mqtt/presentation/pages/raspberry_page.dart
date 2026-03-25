@@ -33,22 +33,28 @@ class RaspberryView extends StatefulWidget {
 
 class _RaspberryViewState extends State<RaspberryView> {
   @override
-  void initState() {
-    super.initState();
-    // Start connecting as soon as the page is opened
-    context.read<RaspberryBloc>().add(const ConnectToPiStarted());
-  }
-
-  @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
       title: const Text('Raspberry Pi Dashboard'),
       actions: [
-        IconButton(
-          icon: const Icon(Icons.refresh),
-          tooltip: 'Reconnect',
-          onPressed: () {
-            context.read<RaspberryBloc>().add(const ConnectToPiStarted());
+        BlocBuilder<RaspberryBloc, RaspberryState>(
+          builder: (context, state) {
+            // Check if we are currently in an active connection state
+            final isConnected =
+                state is RaspberryConnected || state is RaspberryLoaded;
+            return IconButton(
+              icon: Icon(isConnected ? Icons.link_off : Icons.link),
+              tooltip: isConnected ? 'Disconnect' : 'Connect',
+              onPressed: () {
+                if (isConnected) {
+                  context.read<RaspberryBloc>().add(
+                    const DisconnectFromPiStarted(),
+                  );
+                } else {
+                  context.read<RaspberryBloc>().add(const ConnectToPiStarted());
+                }
+              },
+            );
           },
         ),
       ],
@@ -132,110 +138,107 @@ class _RaspberryViewState extends State<RaspberryView> {
   ) {
     final l10n = AppLocalizations.of(context)!;
 
-    return RefreshIndicator(
-      onRefresh: () async {
-        context.read<RaspberryBloc>().add(const ConnectToPiStarted());
-      },
-      child: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          //TODO(freudenfranz): switch this to a simple dot (green/red)
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Text(
-                (status?.status ?? PiSystemStatus.offline).name,
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color:
-                      (status?.status ?? PiSystemStatus.offline) ==
-                          PiSystemStatus.online
-                      ? Colors.green
-                      : Colors.red,
-                ),
+    // Determine the status color and text cleanly
+    final isOnline =
+        (status?.status ?? PiSystemStatus.offline) == PiSystemStatus.online;
+    final statusColor = isOnline ? Colors.green : Colors.red;
+    final statusText = isOnline ? 'Online' : 'Offline';
+
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Text(
+              statusText,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
-              IconButton(
-                onPressed: () {},
-                icon: Icon(
-                  (status?.status ?? PiSystemStatus.offline) ==
-                          PiSystemStatus.online
-                      ? Icons.check_circle_outline
-                      : Icons.not_interested_outlined,
-                  color:
-                      (status?.status ?? PiSystemStatus.offline) ==
-                          PiSystemStatus.online
-                      ? Colors.green
-                      : Colors.red,
-                ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: statusColor,
+                boxShadow: [
+                  // Adds a nice little "LED Glow" effect around the dot
+                  BoxShadow(
+                    color: statusColor.withValues(alpha: 0.4),
+                    blurRadius: 6,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        // A grid of cards for the telemetry
+        if (telemetry != null)
+          GridView.count(
+            crossAxisCount: 4,
+            crossAxisSpacing: 16,
+            mainAxisSpacing: 16,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              TelemetryCard(
+                title: l10n.telemetryStatus,
+                value: telemetry.status.name,
+                icon: Icons.network_ping,
+                color: telemetry.status == PiSystemStatus.online
+                    ? Colors.green
+                    : Colors.red,
+              ),
+              TelemetryCard(
+                title: l10n.telemetryUptime,
+                value: telemetry.uptime.toString(),
+                icon: Icons.timelapse,
+                color: Colors.green,
+              ),
+              TelemetryCard(
+                title: l10n.telemetryCpuTemp,
+                value: telemetry.cpuTemperature.toString(),
+                icon: Icons.thermostat,
+                color: Colors.green,
               ),
             ],
-          ),
-          const SizedBox(height: 16),
-          // A grid of cards for the telemetry
-          if (telemetry != null)
-            GridView.count(
-              crossAxisCount: 4,
-              crossAxisSpacing: 16,
-              mainAxisSpacing: 16,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              children: [
-                TelemetryCard(
-                  title: l10n.telemetryStatus,
-                  value: telemetry.status.name,
-                  icon: Icons.network_ping,
-                  color: telemetry.status == PiSystemStatus.online
-                      ? Colors.green
-                      : Colors.red,
-                ),
-                TelemetryCard(
-                  title: l10n.telemetryUptime,
-                  value: telemetry.uptime.toString(),
-                  icon: Icons.timelapse,
-                  color: Colors.green,
-                ),
-                TelemetryCard(
-                  title: l10n.telemetryCpuTemp,
-                  value: telemetry.cpuTemperature.toString(),
-                  icon: Icons.thermostat,
-                  color: Colors.green,
-                ),
-              ],
-            )
-          else
-            const SizedBox.shrink(),
-          const SizedBox(height: 16),
-          /*Card(
-              child: ListTile(
-                leading: const Icon(Icons.timer),
-                title: const Text('Uptime'),
-                // Very basic seconds to hours conversion
-                subtitle: Text(
-                  '${(status.uptimeSeconds / 3600).toStringAsFixed(1)} Hours',
-                ),
-              ),
-            ),*/
-          const SizedBox(height: 32),
-          const Text(
-            'GPIO Control (Coming Soon)',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey,
-            ),
-          ),
-          const SizedBox(height: 16),
-          const Card(
-            child: Padding(
-              padding: EdgeInsets.all(32),
-              child: Center(
-                child: Text('GPIO visualizer will be placed here.'),
+          )
+        else
+          const SizedBox.shrink(),
+        const SizedBox(height: 16),
+        /*Card(
+            child: ListTile(
+              leading: const Icon(Icons.timer),
+              title: const Text('Uptime'),
+              // Very basic seconds to hours conversion
+              subtitle: Text(
+                '${(status.uptimeSeconds / 3600).toStringAsFixed(1)} Hours',
               ),
             ),
+          ),*/
+        const SizedBox(height: 32),
+        const Text(
+          'GPIO Control (Coming Soon)',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: Colors.grey,
           ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 16),
+        const Card(
+          child: Padding(
+            padding: EdgeInsets.all(32),
+            child: Center(child: Text('GPIO visualizer will be placed here.')),
+          ),
+        ),
+      ],
     );
   }
 }

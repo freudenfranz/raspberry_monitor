@@ -66,6 +66,12 @@ class MQTTRemoteDataSourceImpl implements MQTTRemoteDataSource {
 
   @override
   Future<void> connect() async {
+    // If we are already connected, just return and do nothing.
+    if (client.connectionStatus?.state == MqttConnectionState.connected) {
+      log.info('Already connected to broker. Skipping connection attempt.');
+      return;
+    }
+
     log.debug('Attempting to connect to $client.hostName:$client.port...');
     try {
       await client.connect();
