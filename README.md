@@ -118,6 +118,24 @@ To address this, we need to introduce a "Control Lease" or "Writer Lock" Manager
 
 This can be done global as in "one lock for all pin's" or "per resource/pin". For now a global lock will be sufficient, but later we can refactor towards a more versatile solution.
 
+### 9. Securing Dynamic Execution: Mitigating Reflection Vulnerabilities
+
+A core feature of this architecture is its ability to seamlessly translate network payloads into gpiozero method calls. This is achieved using Python's built-in reflection capabilities (specifically, the getattr() function).
+
+When a client sends a JSON payload like {"device": "status_led", "method": "blink"}, the HardwareManager dynamically looks up the blink attribute on the corresponding gpiozero object and executes it.
+
+The Vulnerability:
+While powerful, executing arbitrary strings provided by a network client is inherently dangerous. Without strict boundaries, a malicious (or buggy) client could attempt to access internal Python object properties or destructive "magic" methods (e.g., sending {"method": "__del__"} or attempting to traverse the object hierarchy to access the underlying OS).
+
+The Mitigation Strategy:
+To ensure the Gatekeeper remains secure while offering a flexible API, we implement strict, multi-layered sanitization on all incoming RPC commands before reflection occurs:
+
+    Strict Device Whitelisting: Clients cannot address arbitrary Python objects. The device field in the JSON payload must strictly match a pre-configured, instantiated device name defined in the Gatekeeper's config.yaml (e.g., status_led). If the device does not exist in the HardwareManager's secure dictionary of initialized gpiozero objects, the command is immediately rejected.
+
+    Attribute Sanitization (The "No Dunder" Rule): The method field (which represents the target attribute or function) is aggressively sanitized. The Gatekeeper explicitly rejects any request where the method string begins with an underscore (_). This simple but unbreakable rule ensures that clients can only interact with the intended public API of the gpiozero devices (like .on(), .off(), .value), completely shielding internal state, private methods, and Python magic methods from network manipulation.
+
+This combination of whitelisted objects and sanitized attributes provides the flexibility of an RPC interface with the security of a hardcoded API, ensuring that network clients can only perform safe, intended hardware operations.
+
 ## The Evolved Solution: A Secure Gatekeeper Architecture
 Our solution is a centralized, self-contained Python application that acts as the sole Gatekeeper and communication hub for all GPIO interactions.
 
@@ -185,6 +203,62 @@ flowchart TB
     classDef kernel fill:#ECEFF1,stroke:#455A64,stroke-width:2px,color:#000
     style A fill:#E3F2FD
     style Mosquitto fill:#FFF9C4
+```
+#### RCP Flow
+
+Diagram detailing the exact journey of a single RPC command using MQTT v5 and the Sync/Async Bridge
+
+```mermaid
+sequenceDiagram
+    autonumber
+    
+    box LightBlue Remote Client (Python Stub or Flutter)
+        participant Client as Remote App
+    end
+    
+    box LightYellow Infrastructure
+        participant Broker as Mosquitto (Port 1883)
+    end
+    
+    box LightGreen Gatekeeper (Asyncio Main Thread)
+        participant MQTT as MQTTManager
+        participant RPC as RPCHandler
+    end
+    
+    box Pink Gatekeeper (Sync Worker Thread)
+        participant Queue as CommandQueue (Thread-Safe)
+        participant HW as HardwareManager
+        participant GPIO as gpiozero (Hardware)
+    end
+
+    %% --- The Request ---
+    Note over Client: User calls `remote_led.on()`
+    Client->>Broker: PUBLISH to `pi/rpc/commands`<br/>Payload: {"device": "led", "method": "on"}<br/>Props: [RespTopic="client/inbox", CorrData="req-123"]
+    Broker->>MQTT: Delivers Message
+    MQTT->>RPC: Passes Topic, Payload, Properties
+    
+    %% --- The Bridge ---
+    Note over RPC: Creates `Future` (The IOU)
+    RPC->>Queue: put_nowait({device, method, Props, Future})
+    RPC--)RPC: `await Future`<br/>(Task pauses, yielding loop)
+    
+    %% --- The Execution ---
+    Queue->>HW: get() pulls command dictionary
+    Note over HW: Security Check: is method public?
+    HW->>HW: Reflection: `getattr(led, "on")`
+    HW->>GPIO: Executes `led.on()`
+    GPIO-->>HW: Returns Success
+    
+    %% --- The Reverse Bridge ---
+    HW->>RPC: `call_soon_threadsafe(Future.set_result, "OK")`
+    
+    %% --- The Response ---
+    Note over RPC: `Future` resolves! Task wakes up.
+    RPC->>MQTT: client.publish()<br/>Topic: "client/inbox"<br/>Payload: {"status": "success", "result": "OK"}<br/>Props: [CorrData="req-123"]
+    MQTT->>Broker: Sends MQTT v5 Response
+    Broker->>Client: Delivers to private inbox
+    
+    Note over Client: Matches "req-123". <br/>`remote_led.on()` returns successfully!
 ```
 
 ### Key Components:
@@ -302,6 +376,24 @@ To protect long-running remote scripts (e.g., a Python daemon running on a lapto
 *   **Lease Timeouts:** Leases are granted with a specific time-to-live (TTL). If the TTL expires, the Gatekeeper automatically revokes the lease and triggers a "Dead-Man's Switch" (e.g., stopping all motors) to return the hardware to a safe state.
 *   **Heartbeat Renewals:** To keep a lease active for a long-running program, the remote client must periodically send a lightweight "Heartbeat" RPC command to the Gatekeeper. As long as the heartbeat is received, the script's execution cannot be interrupted by other clients, and its state remains secure. If the remote script crashes, the heartbeats stop, the lease expires, and the Pi safely shuts down the operation.
 
+### Dynamic & Future-Proof Event Handling
+
+A core design principle of this Gatekeeper is to fully emulate the rich, event-driven behavior of the gpiozero library without requiring manual code changes when new hardware is introduced.
+
+Instead of hardcoding specific event callbacks (like when_pressed or when_motion), the HardwareManager uses a dynamic discovery mechanism at startup.
+
+How it works:
+
+    Reflection: At startup, the HardwareManager iterates through every gpiozero device registered in the config.yaml.
+
+    Discovery: Using Python's reflection capabilities (dir()), it inspects each device object for all public attributes that follow gpiozero's event naming convention (i.e., any attribute that starts with when_, such as when_pressed, when_held, or when_motion).
+
+    Automatic Binding: For every when_* event it discovers, the manager automatically generates and binds a generic event handler. This handler is responsible for capturing the event, packaging it into a DeviceStatePayload (including the device name and event type, like "pressed"), and safely pushing it onto the asynchronous event queue for broadcast over MQTT.
+
+The Benefit:
+
+This architecture makes the Gatekeeper extremely versatile and future-proof. If you add a new type of gpiozero input device to your config.yaml (e.g., a RotaryEncoder with when_rotated_clockwise and when_rotated_counter_clockwise events), the system will automatically detect and support these new events without a single line of code being changed in the Gatekeeper. It provides a true "plug-and-play" experience for any event-driven device supported by the gpiozero ecosystem.
+
 ---
 
 ### Data Flow & Architecture Diagram
@@ -381,7 +473,7 @@ To ensure industrial-grade stability and unlock native MQTT v5 features (specifi
 *   **The `MQTTManager`:** This class serves as the central network controller. It:
     1.  Maintains the persistent connection to the broker.
     2.  Runs the **Outbound Pipeline**, a background loop that consumes `HardwareEvent` objects from the internal queue and publishes them to dynamically generated topics (e.g., `pi/devices/{device}/state`).
-    3.  Implements the **Gateway Pattern**, providing a thread-safe injection point (`publish_hardware_event`) for the Hardware Manager to submit data without knowing about the network topology.
+    3.  Implements the **Gateway Pattern**, providing a thread-safe injection point (`publish_event`) for the Hardware Manager to submit data without knowing about the network topology.
 *   **Integration Strategy:** The system is verified using full integration tests against a live, containerized Mosquitto instance, ensuring that payload serialization, topic generation, and MQTT v5 protocol negotiation function correctly in a real-world environment.
 
 ### 4. Telemetry & Application Orchestration `v0.4.0`
@@ -402,10 +494,13 @@ This phase focused on bringing the individual server components together into a 
 - [ ] **Flutter Dashboard (v1):** Build the initial Flutter UI to connect to Mosquitto, subscribe to the state topics, and visualize the live data stream.
 
 ### Phase 5: Inbound RPC & Remote Control (Real MQTT v5) `v0.5.0`
-*Goal: Close the loop by allowing the dashboard to send commands back to the hardware.*
-- [ ] **v5 Protocol Handler:** Implement `RPCProtocol` to decode incoming commands and route them using **native MQTT v5** `Response Topic` and `Correlation Data` properties (no JSON hacks needed).
-- [ ] **Command Router:** Implement `RPCHandler` to pass validated commands into the `HardwareManager`'s inbound queue.
-- [ ] **Response Pipeline:** Ensure execution results are published back to the requesting client's inbox via v5 properties.
+*Successfully bridged the Asynchronous network layer with the Synchronous hardware layer using an RPC pattern.*
+
+- **Universal RPC Inbox:** Implemented a single entry point (`pi/rpc/commands`) that handles execution intents for all registered devices.
+- **Async/Sync Resolution Bridge:** Utilized `asyncio.Future` (IOUs) to allow the async broker thread to pause and wait for the dedicated hardware worker thread to complete physical actions before replying.
+- **Secure Dynamic Reflection:** Implemented a reflection-based execution engine using `getattr()` that emulates the full `gpiozero` API (Methods and Properties). This is protected by a strict "No Dunder" security rule, preventing access to private attributes or internal Python magic methods.
+- **MQTT v5 Native RPC:** Fully leveraged the MQTT v5 protocol properties. Commands now include a `Response Topic` and `Correlation Data` (Base64 encoded), allowing clients to receive definitive, non-blocking confirmations of hardware success or failure.
+- **Magic Device Linking:** Implemented string-to-object translation (e.g., `@device:name`) allowing remote clients to link physical hardware devices together natively on the Pi (e.g., setting an LED's source to a Button's values).
 
 ### Phase 6: The Remote Client Stub `v0.6.0`
 *Goal: Provide a seamless Python developer experience for remote machines and local scripts.*

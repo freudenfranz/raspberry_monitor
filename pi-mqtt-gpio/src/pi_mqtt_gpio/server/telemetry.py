@@ -48,7 +48,7 @@ class TelemetryMonitor:
     def publish_shutdown_message(self):
         """Publishes the final goodbye message before the app dies."""
         goodbye_payload = TelemetryPayload(status='shutting_down')
-        self.mqtt_manager.publish_hardware_event(goodbye_payload)
+        self.mqtt_manager.publish_event(goodbye_payload)
         logger.info("Published 'shutting_down' telemetry message.")
 
     async def _loop(self):
@@ -65,7 +65,7 @@ class TelemetryMonitor:
                 )
                 
                 # Publish using the MQTTManager's Gateway
-                self.mqtt_manager.publish_hardware_event(payload)
+                self.mqtt_manager.publish_event(payload)
                 
                 # Sleep until next tick
                 await asyncio.sleep(self.interval)

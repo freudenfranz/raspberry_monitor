@@ -1,64 +1,119 @@
-import pytest
+"""
+Phase 3/5 Tests: MQTT v5 RPC Request Handler and Response Publisher.
+Tests the functionality of the rpc_handler.py module using the universal
+'pi/rpc/commands' inbox, ensuring correct parsing, queuing, and v5 responses.
+"""
 import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
+import json
+import pytest
+from unittest.mock import AsyncMock
+
+from pi_mqtt_gpio.server.rpc_handler import RPCHandler
 from pi_mqtt_gpio.server.hardware import HardwareManager
 
-"""
-Phase 3 Tests: MQTT v5 RPC Request Handler and Response Publisher.
-Tests the functionality of the rpc_handler.py module, ensuring correct parsing
-of incoming RPC requests, queuing commands, and publishing MQTT v5 responses.
-"""
+ #Add this small helper class at the top of your test file
+class MockProperties:
+    def __init__(self, response_topic=None, correlation_data=None):
+        self.ResponseTopic = response_topic
+        self.CorrelationData = correlation_data
 
 @pytest.fixture
 def mock_hardware_manager_for_rpc(mocker):
-    """
-    Mocks the HardwareManager for RPC handler tests, ensuring its queues are real.
-    """
+    """Mocks the HardwareManager for RPC handler tests."""
     mock_hm = mocker.MagicMock(spec=HardwareManager)
-    mock_hm.command_queue = asyncio.Queue()
-    mock_hm.event_queue = asyncio.Queue()
-    mock_hm.async_loop = asyncio.get_event_loop()
-    # Mock the _execute_command which will be called by the worker thread
-    # For RPC handler tests, we might want to mock the result of command execution,
-    # or even the worker thread itself if focusing purely on RPC parsing.
-    mock_hm._execute_command = AsyncMock(return_value="hardware_op_success") 
+    
+    # Explicitly attach a mock queue so we can track the 'put_nowait' calls
+    mock_hm.inbound_command_queue = mocker.MagicMock()
+    
     return mock_hm
 
 @pytest.fixture
 def mock_mqtt_client_for_rpc(mocker):
-    """Mocks the amqtt client interface for the RPC handler to publish responses."""
+    """Mocks the aiomqtt client interface for the RPC handler."""
     mock_client = mocker.MagicMock()
-    mock_client.publish.return_value = (0, 0) # Simulate successful publish
+    mock_client.publish = AsyncMock() 
     return mock_client
 
 @pytest.mark.asyncio
 async def test_rpc_handler_parses_and_queues_command(mock_hardware_manager_for_rpc, mock_mqtt_client_for_rpc):
-    """
-    Tests that an incoming MQTT message with an RPC command payload
-    is correctly parsed by the RPC handler and put onto the HardwareManager's command_queue.
-    """
-    assert True # Placeholder
+    """Tests that a command sent to the universal inbox is parsed and queued."""
+    handler = RPCHandler(hardware_manager=mock_hardware_manager_for_rpc, broker_publish_method=mock_mqtt_client_for_rpc.publish)
+    
+    topic = "pi/rpc/commands"
+    # Notice the device is inside the payload now!
+    payload = json.dumps({"device": "led_17", "method": "on", "args": [], "kwargs": {}}).encode('utf-8')
+    
+    await handler.mqtt_message_handler(topic, payload, properties={})
+    
+    # Assert it was put in the queue
+    mock_hardware_manager_for_rpc.inbound_command_queue.put_nowait.assert_called_once()
+    queued_cmd = mock_hardware_manager_for_rpc.inbound_command_queue.put_nowait.call_args[0][0]
+    
+    assert queued_cmd["device"] == "led_17"
+    assert queued_cmd["method"] == "on"
+    assert isinstance(queued_cmd["future"], asyncio.Future) 
 
 @pytest.mark.asyncio
 async def test_rpc_handler_handles_mqtt_v5_request_response(mock_hardware_manager_for_rpc, mock_mqtt_client_for_rpc):
-    """
-    Verifies that the RPC handler extracts MQTT v5 Request/Response properties
-    (response topic, correlation data) and passes them to the command dict.
-    """
-    assert True # Placeholder
-
-@pytest.mark.asyncio
-async def test_rpc_handler_publishes_error_response_on_hardware_failure(mock_hardware_manager_for_rpc, mock_mqtt_client_for_rpc):
-    """
-    Tests that if a hardware command fails, an appropriate MQTT v5 error response
-    is published back to the client.
-    """
-    assert True # Placeholder
+    """Verifies that the RPC handler extracts MQTT v5 Request/Response properties."""
+    handler = RPCHandler(hardware_manager=mock_hardware_manager_for_rpc, broker_publish_method=mock_mqtt_client_for_rpc.publish)
+    
+    topic = "pi/rpc/commands"
+    payload = json.dumps({"device": "led_17", "method": "on"}).encode('utf-8')
+    properties = MockProperties(response_topic="client/123/response", correlation_data=b"req-abc")
+    
+    await handler.mqtt_message_handler(topic, payload, properties)
+    
+    queued_cmd = mock_hardware_manager_for_rpc.inbound_command_queue.put_nowait.call_args[0][0]
+    assert queued_cmd["rpc_response_topic"] == "client/123/response"
+    assert queued_cmd["correlation_data"] == b"req-abc"
 
 @pytest.mark.asyncio
 async def test_rpc_handler_publishes_success_response_on_hardware_success(mock_hardware_manager_for_rpc, mock_mqtt_client_for_rpc):
-    """
-    Tests that if a hardware command succeeds, an appropriate MQTT v5 success response
-    is published back to the client.
-    """
-    assert True # Placeholder
+    """Tests that a success response is published back to the client."""
+    handler = RPCHandler(hardware_manager=mock_hardware_manager_for_rpc, broker_publish_method=mock_mqtt_client_for_rpc.publish)
+    
+    topic = "pi/rpc/commands"
+    payload = json.dumps({"device": "led_17", "method": "on"}).encode('utf-8')
+    properties = MockProperties(response_topic="client/123/response", correlation_data=b"req-abc")
+
+    await handler.mqtt_message_handler(topic, payload, properties)
+    queued_cmd = mock_hardware_manager_for_rpc.inbound_command_queue.put_nowait.call_args[0][0]
+    future: asyncio.Future = queued_cmd["future"]
+    
+    # Simulate success
+    future.set_result({"state": "ON"}) 
+    await asyncio.sleep(0.01) # Yield to the event loop
+    
+    # Assert response
+    mock_mqtt_client_for_rpc.publish.assert_called_once()
+    args, kwargs = mock_mqtt_client_for_rpc.publish.call_args
+    
+    publish_args = args[0]
+    
+    assert publish_args.response_topic == "client/123/response"    
+    assert b"ON" in publish_args.result['state'].encode('utf-8')
+    assert publish_args.correlation_data == b"req-abc"
+
+@pytest.mark.asyncio
+async def test_rpc_handler_publishes_error_response_on_hardware_failure(mock_hardware_manager_for_rpc, mock_mqtt_client_for_rpc):
+    """Tests that an error response is published if hardware fails."""
+    handler = RPCHandler(hardware_manager=mock_hardware_manager_for_rpc, broker_publish_method=mock_mqtt_client_for_rpc.publish)
+    
+    topic = "pi/rpc/commands"
+    payload = json.dumps({"device": "led_17", "method": "on"}).encode('utf-8')
+    properties = MockProperties(response_topic="client/123/response", correlation_data=b"req-abc")
+    
+    await handler.mqtt_message_handler(topic, payload, properties)
+    queued_cmd = mock_hardware_manager_for_rpc.inbound_command_queue.put_nowait.call_args[0][0]
+    
+    # Simulate failure
+    queued_cmd["future"].set_exception(ValueError("Pin 17 is on fire"))
+    await asyncio.sleep(0.01)
+    
+    mock_mqtt_client_for_rpc.publish.assert_called_once()
+    
+    args, kwargs = mock_mqtt_client_for_rpc.publish.call_args
+    publish_args = args[0]
+    assert b"error" in publish_args.status.encode('utf-8')
+    assert b"on fire" in publish_args.message.encode('utf-8')

@@ -4,6 +4,8 @@ Data Models for Internal Communication and MQTT Payloads.
 Defines a hierarchy of models to ensure consistency across 
 Hardware, Broker, and Network layers.
 """
+import asyncio
+import base64
 from dataclasses import dataclass, field, asdict
 import json
 from typing import Any, Dict, List, Optional
@@ -19,14 +21,30 @@ class SystemStatus(str, Enum):
 
 # --- Base Classes (The "Blueprints") ---
 
+# Helper function for the JSON encoder
+def custom_json_serializer(obj):
+    """Custom JSON serializer for objects not serializable by default json code"""
+    if isinstance(obj, bytes):
+        # We can't send raw bytes, so we encode them as a Base64 string.
+        # This is a standard way to represent binary data in JSON.
+        return base64.b64encode(obj).decode('utf-8')
+    
+    # If we don't know what it is (like a generator), just return its string representation
+    # This prevents the 'cannot pickle' or 'not JSON serializable' errors.
+    try:
+        return str(obj)
+    except Exception:
+        return f"<Unserializable {type(obj).__name__}>"
+    
 @dataclass(frozen=True, kw_only=True) 
 class BasePayload:
     """Base class for all JSON payloads sent over MQTT."""
     timestamp: float = field(default_factory=time.time) 
 
     def to_json(self) -> str:
-        """Converts the object to a JSON string."""
-        return json.dumps(asdict(self))
+        """Converts the object to a JSON string, handling bytes correctly."""
+        # Use the `default` argument to handle special types like bytes
+        return json.dumps(asdict(self), default=custom_json_serializer)
 
     def to_bytes(self) -> bytes:
         """Converts the object to UTF-8 encoded bytes for MQTT."""
@@ -59,7 +77,19 @@ class RPCCommandPayload(BasePayload):
     method: str
     args: List[Any] = field(default_factory=list)
     kwargs: Dict[str, Any] = field(default_factory=dict)
+    rpc_response_topic: str = field(default_factory=str)
+    correlation_data: bytes = field(default_factory=bytes)
+    future: asyncio.Future = field(default_factory=asyncio.Future)
 
+@dataclass(frozen=True, kw_only=True)
+class RPCResponsePayload(BasePayload):
+    """Payload representing a command response to be sent back to the client."""
+    response_topic: str
+    status: str
+    result: Any = None
+    message: str = ""
+    correlation_data: Optional[bytes] = None #
+    
 @dataclass(frozen=True, kw_only=True)
 class LogPayload(BasePayload):
     """Payload for remote logging/telemetry."""

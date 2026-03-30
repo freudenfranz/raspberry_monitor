@@ -51,7 +51,7 @@ async def test_main_orchestrates_startup_and_wiring(
     # 3. Assertions: Did it do its job?
     
     # Did it load config?
-    mock_load_config.assert_called_once_with("config.yaml")
+    mock_load_config.assert_called_once_with("./config.yaml")
     
     # Did it initialize hardware with the config list?
     mock_hw_instance.initialize_gpio_devices.assert_called_once()
@@ -60,7 +60,7 @@ async def test_main_orchestrates_startup_and_wiring(
     # We assert that HardwareManager was instantiated with the correct arguments
     # Look at the 'kwargs' of the call to ensure the callback was passed correctly
     _, kwargs = MockHardwareManager.call_args
-    assert kwargs['publish_callback'] == mock_mqtt_instance.publish_hardware_event
+    assert kwargs['publish_callback'] == mock_mqtt_instance.publish_event
     
     # Did it start the services?
     mock_hw_instance.start_worker_thread.assert_called_once()
@@ -82,7 +82,11 @@ async def test_shutdown_sequence():
     # Setup fakes
     mock_loop = MagicMock()
     mock_loop.stop = MagicMock()
-    
+
+    mock_telemetry = MagicMock() # 1. Create mock telemetry
+    mock_telemetry.stop = AsyncMock()
+    mock_telemetry.publish_shutdown_message = MagicMock()
+
     mock_mqtt = MagicMock()
     mock_mqtt.stop = AsyncMock()
     
@@ -90,7 +94,7 @@ async def test_shutdown_sequence():
     mock_hw.stop_worker_thread = MagicMock()
 
     # Call the shutdown function
-    await shutdown("SIGINT", mock_loop, mock_mqtt, mock_hw)
+    await shutdown("SIGINT", mock_loop, mock_mqtt, mock_hw, mock_telemetry)
 
     # Assert correct shutdown order
     mock_mqtt.stop.assert_awaited_once()

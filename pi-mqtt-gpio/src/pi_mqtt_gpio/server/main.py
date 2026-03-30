@@ -14,14 +14,18 @@ import asyncio
 import logging 
 import signal
 import time
+import platform 
 
 from pathlib import Path
 from typing import Dict, Any
+from gpiozero import Device
 
+from gpiozero.pins.mock import MockFactory, MockPWMPin 
 from pi_mqtt_gpio.server.config_loader import load_config
 from pi_mqtt_gpio.server.hardware import HardwareManager
 from pi_mqtt_gpio.server.models import DeviceStatePayload, SystemStatus, SystemStatusPayload, TelemetryPayload
 from pi_mqtt_gpio.server.mqtt import MQTTManager
+from pi_mqtt_gpio.server.rpc_handler import RPCHandler
 from pi_mqtt_gpio.server.telemetry import TelemetryMonitor 
 
 def setup_logging():
@@ -37,6 +41,8 @@ def setup_logging():
 
 logger = logging.getLogger(__name__)
 
+
+
 async def shutdown(signal_name:str, loop:asyncio.BaseEventLoop, mqtt_manager:MQTTManager, hardware_manager:HardwareManager, telemetry_monitor:TelemetryMonitor):
     """Graceful shutdown handler."""
     logger.info(f"Received exit signal {signal_name}...")
@@ -47,7 +53,7 @@ async def shutdown(signal_name:str, loop:asyncio.BaseEventLoop, mqtt_manager:MQT
     # Also explicitly send the 'offline' status to the status topic, since the Last Will might not be delivered if MQTTManager is gracefully stopped.
     offline_payload = SystemStatusPayload(status='offline')
     # The topic should be pi/status as defined in your config
-    mqtt_manager.publish_hardware_event(offline_payload)
+    mqtt_manager.publish_event(offline_payload)
     logger.info(f"publishing shutdown message to {mqtt_manager.status_topic} before stopping services...")
     
     await asyncio.sleep(0.1) # Give it a moment to publish before we tear down the broker
@@ -70,31 +76,42 @@ async def shutdown(signal_name:str, loop:asyncio.BaseEventLoop, mqtt_manager:MQT
     
     # Stop the loop
     loop.stop()
-    
+
 async def main_application_runner():
     setup_logging()
     logger.info("Starting Gatekeeper...")
-
+    
+    #----------------------------------------------------------
+    # If we are not on Linux (e.g. running on a Mac/Windows), fake the hardware!
+    if platform.system() != "Linux":
+        logger.warning("Not running on Linux! Forcing gpiozero MockFactory for local development.")
+        Device.pin_factory = MockFactory(pin_class=MockPWMPin)
+    #----------------------------------------------------------
+    
     # Load config
-    script_dir = Path(__file__).parent
-    config:Dict[str, Any] = load_config(script_dir / "config.yaml")
+    config:Dict[str, Any] = load_config("./config.yaml")
     
     # Get loop
     loop = asyncio.get_event_loop()
     
     # Instantiate MQTTManager (Needs event_queue, config)
     event_queue = asyncio.Queue()
-    mqtt_manager = MQTTManager(event_queue=event_queue, config=config)
+    mqtt_manager = MQTTManager(event_queue=event_queue, config=config) 
 
     # Instantiate HardwareManager
-    hardware_manager = HardwareManager(async_loop=loop, publish_callback=mqtt_manager.publish_hardware_event, config=config)
+    hardware_manager = HardwareManager(async_loop=loop, publish_callback=mqtt_manager.publish_event, config=config)
     
-    # Initialize GPIO Devices
-    hardware_manager.initialize_gpio_devices()
+    # Instantiate RPC Handler
+    rpc_handler = RPCHandler(hardware_manager=hardware_manager, broker_publish_method=mqtt_manager.publish_event) 
+
+    # Tell MQTT to notify the RPC Handler when messages arrive.
+    mqtt_manager.register_message_callback(rpc_handler.mqtt_message_handler)
     
     # Start Services
+    hardware_manager.initialize_gpio_devices()
     hardware_manager.setup_gpio_callbacks()
     hardware_manager.start_worker_thread() # Starts the GPIO event loop in a separate thread
+
     await mqtt_manager.start() # Starts the MQTT loop in the background
 
     # Instantiate and start the Telemetry Monitor ---
@@ -111,7 +128,7 @@ async def main_application_runner():
 
     logger.info("Gatekeeper is fully operational. Press Ctrl+C to exit.")
     
-    # 9. The Infinite Wait
+    # The Infinite Wait
     try:
         await asyncio.Future() 
     except asyncio.CancelledError:

@@ -18,15 +18,16 @@ import functools # Will be used for partial function application in gpiozero cal
 
 # These imports will use the mocked gpiozero on non-Pi systems
 # and the real one on a Pi (due to pyproject.toml optional dependencies)
-from gpiozero import Device, LED, Button, Motor
+from gpiozero import PWMLED, Device, LED, Button, Motor
 from pi_mqtt_gpio.server.models import DeviceStatePayload # Placeholder for device types
 # from gpiozero.pins.lgpio import LGPIONoSerial, LGPIOFactory # Will be used for factory setup
 
 # Map string names to classes
 DEVICE_CLASSES = {
     "LED": LED,
+    "PWMLED": PWMLED,
     "Button": Button,
-    "Motor": Motor
+    "Motor": Motor,
 }
 
 logger = log.getLogger(__name__)
@@ -43,7 +44,7 @@ class HardwareManager:
     _worker_thread: threading.Thread | None # It can be a Thread object or None
     _worker_running: threading.Event
     
-    publish_callback: callable
+    _publish_callback: callable
     #TODO: should we limit the size of these queues to prevent memory issues? (e.g., maxsize=100) including errorhandling
     
     """
@@ -57,12 +58,11 @@ class HardwareManager:
         # Initialize a `threading.Thread` for the worker and a `threading.Event` to control its lifecycle
         self._worker_thread = None
         self._worker_running = threading.Event()
-        self._publish_hardware_event = None # This will be set by the broker when it starts, allowing us to publish events from the worker thread
         self._publish_callback = publish_callback
 
     def initialize_gpio_devices(self):
         """
-        Loads configuration from a config file and creates gpiozero device objects.
+        WARNING: This config prevents malicious users from creating arbitrary devices. 
         For MVP, hardcode a few devices (e.g., LED, Button) for testing.
         Ensure gpiozero's pin factory is set to LGPIOFactory on a real Pi,
         or relies on mocks in the test environment.
@@ -93,23 +93,30 @@ class HardwareManager:
 
     def setup_gpio_callbacks(self):
         """
-        Configures gpiozero event callbacks (`when_pressed`, `when_released`)
-        to safely push events onto the async event queue via `call_soon_threadsafe`.
+        Dynamically discovers and configures ALL gpiozero event callbacks.
         """
-        # Iterate through relevant gpiozero input devices in self.devices
-        # For each device, use functools.partial to wrap `self.generic_event_handler`
-        # Assign the partial function to gpiozero callbacks (e.g., button.when_pressed)
-        
-        if "button_27" in self.devices:
-            button:Device = self.devices["button_27"]
-            
-            # Use functools.partial to create a callback that includes device_name and event_type
-            # This allows our generic_event_handler to know which button and what event occurred
-            button.when_pressed = functools.partial(self.generic_event_handler, "button_27", button, event="pressed")
-            button.when_released = functools.partial(self.generic_event_handler, "button_27", button, event="released")
-            logger.debug("Configured callbacks for button_27.")
-        else:
-            logger.warning("no device found. Callbacks not configured for it.")
+        callbacks_configured = 0
+
+        for device_name, device_obj in self.devices.items():
+            for attr_name in dir(device_obj):
+                if attr_name.startswith("when_"):
+                    action_name = attr_name.replace("when_", "")
+                    
+                    callback_func = functools.partial(
+                        self.generic_event_handler,
+                        device_name,
+                        # Pass 'action_name' as a POSITIONAL argument, not a keyword argument.
+                        action_name  
+                    )
+
+                    try:
+                        setattr(device_obj, attr_name, callback_func)
+                        callbacks_configured += 1
+                        logger.debug(f"Bound generic handler to '{attr_name}' event on device '{device_name}'")
+                    except Exception as e:
+                        logger.warning(f"Could not set callback for '{attr_name}' on '{device_name}': {e}")
+
+        logger.info(f"Dynamically configured {callbacks_configured} event callbacks.")
 
     def start_worker_thread(self):
         """
@@ -193,51 +200,91 @@ class HardwareManager:
         # Implement basic error handling for device/method not found or execution errors
         # (Future: Handle MQTT v5 RPC success/error response publishing)
         device_name = command.get("device")
-        method_name = command.get("method")
-        args = command.get("args", [])
-        kwargs = command.get("kwargs", {})
-        rpc_response_topic = command.get("rpc_response_topic") # For MQTT v5 RPC
-        if device_name not in self.devices:
-            error_msg = f"Device '{device_name}' not found."
-            logger.error(f"Error: {error_msg}")
-            # TODO: publish RPC error response
-            return error_msg
-
-        device_obj = self.devices[device_name]
-        method_to_call = getattr(device_obj, method_name, None)
+        target_attr = command.get("method") 
+        raw_args = command.get("args", [])
+        raw_kwargs = command.get("kwargs", {})
         
-        if method_to_call is None:
-            error_msg = f"Method '{method_name}' not found on device '{device_name}'"
-            logger.error(f"Error: {error_msg}")
-            # TODO: publish RPC error response
-            return error_msg
         try:
-            logger.debug(f"Attempting to execute command {method_name} on device '{device_name}'  with args={args} kwargs={kwargs}")
-            result = method_to_call(*args, **kwargs)
-            logger.debug(f"Command executed successfully. Result: {result}")
-        except Exception as e:
-            error_msg = f"Error executing command '{method_name}' on device '{device_name}': {e}"
-            logger.error(f"Error: {error_msg}")
-            # TODO: publish RPC error response
-            return error_msg
+            # SECURITY CHECK: The "No Dunder" Rule
+            # Reject any attempt to access private variables, methods, or Python magic methods.
+            if not isinstance(target_attr, str) or str(target_attr).startswith("_"):
+                    raise PermissionError(f"Access to private attribute '{target_attr}' is forbidden.")
+            
+            # Verify Device Exists
+            device_obj = self.devices.get(device_name)
+            if not device_obj:
+                    raise ValueError(f"Device '{device_name}' not found in registry.")
+            
+            # The "Magic Translation" Step (for linking devices over MQTT)
+            def resolve_arg(arg):
+                if isinstance(arg, str) and arg.startswith("@device:"):
+                    target_device_id = arg.split(":", 1)[1]
+                    if target_device_id in self.devices:
+                        if target_attr == "source":
+                            return self.devices[target_device_id].values
+                        return self.devices[target_device_id]
+                    else:
+                        raise ValueError(f"Cannot link to unknown device: {target_device_id}")
+                return arg
+            
+            args = [resolve_arg(a) for a in raw_args]
+            kwargs = {k: resolve_arg(v) for k, v in raw_kwargs.items()}
 
-    def generic_event_handler(self, device_name: str, device: Device, action: str):
+            # Get the target attribute safely (it's public, and the device exists)
+            attr = getattr(device_obj, target_attr)
+
+            # Execute or Assign    
+            if callable(attr):
+                # It is a function (e.g., led.on())
+                logger.debug(f"Attempting to execute command {target_attr} on device '{device_name}'  with args={args} kwargs={kwargs}")
+                result = attr(*args, **kwargs)
+            else:
+                # It is setting a property (e.g., led.value = 0.5)
+                if args:
+                    logger.debug(f"Attempting to set attribute {target_attr} on device '{device_name}'  with args={args} kwargs={kwargs}")    
+                    setattr(device_obj, target_attr, args[0])
+                    # If we just set 'source', don't read it back (it's a generator)
+                    if target_attr == "source":
+                        result = f"Linked to {args[0]}" 
+                    else:
+                        # For simple things like .value, reading it back is fine
+                        result = getattr(device_obj, target_attr)
+                # Or reading a property (e.g., target_attr.is_pressed)
+                else:
+                    logger.debug(f"Attempting to execute command {target_attr} on device '{device_name}'  with args={args} kwargs={kwargs}")
+                    result = attr
+            
+            # Resolve Success
+            if "future" in command:
+                self.async_loop.call_soon_threadsafe(command["future"].set_result, result)
+        
+        except Exception as e:
+            logger.error(f"Error executing command '{target_attr}' on '{device_name}': {e}")
+            if "future" in command:
+                # This tells the RPCHandler that the command failed, allowing it to send an MQTT Error Response!
+                self.async_loop.call_soon_threadsafe(command["future"].set_exception, e)
+
+    def generic_event_handler(self, device_name: str, action: str, *args):
         """
         This callback is assigned to gpiozero events. It runs in a separate thread.
         It safely enqueues the event payload onto the asyncio event_queue.
+        The '*args' parameter is used to soak up any unexpected positional
+        arguments that gpiozero might send with its callbacks.
         """
-        # Construct the event payload dictionary (device_name, event_type, timestamp)
-        # Use `self.async_loop.call_soon_threadsafe` to safely put the event onto `self.event_queue`
-        # Implement basic error handling for queueing failure
-        event = DeviceStatePayload(device=device_name, event=action, value=device.value)
-
-        # This is the 'magic': safely schedule a task on the main async loop from this worker thread
         try:
-            self.async_loop.call_soon_threadsafe(self.publish_callback, event)
+            # Look up the device object using the name passed by the partial
+            device = self.devices.get(device_name)
+            if not device:
+                logger.warning(f"Event received for unknown device: {device_name}")
+                return
+
+            event = DeviceStatePayload(device=device_name, event=action, value=device.value)
+
+            # Safely schedule a task on the main async loop
+            self.async_loop.call_soon_threadsafe(self._publish_callback, event)
             logger.debug(f"Event published: {event.to_json()}")
         except Exception as e:
             logger.error(f"Error publishing event from hardware thread: {e}")
-
 
 # --- Main Application Runner Placeholder (for local testing during development) ---
 async def run_hardware_manager_test():

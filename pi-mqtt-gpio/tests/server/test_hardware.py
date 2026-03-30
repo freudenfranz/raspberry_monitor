@@ -1,3 +1,4 @@
+from pi_mqtt_gpio.server.models import DeviceStatePayload
 import pytest
 import asyncio
 import time
@@ -14,6 +15,14 @@ Tests the functionality of the HardwareManager, ensuring safe and ordered
 transfer of commands to hardware and events from hardware.
 """
 
+# Dummy config so HardwareManager knows what devices to create in the tests!
+DUMMY_CONFIG = {
+    "devices": [
+        {"name": "led_17", "pin": 17, "type": "LED"},
+        {"name": "button_27", "pin": 27, "type": "Button"}
+    ]
+}
+
 @pytest.mark.asyncio
 async def test_hardware_manager_command_execution():
     """
@@ -21,7 +30,11 @@ async def test_hardware_manager_command_execution():
     This uses gpiozero's MockFactory set up in conftest.py, so LED(17) is a mock LED.
     """
     # Create an instance of our HardwareManager
-    manager = HardwareManager(async_loop=asyncio.get_event_loop())
+    manager = HardwareManager(
+        async_loop=asyncio.get_running_loop(), 
+        publish_callback=MagicMock(), # We don't care about publishing in this test
+        config=DUMMY_CONFIG
+    )
     
     # Initialize the gpiozero devices. These will be MockFactory's mock devices.
     manager.initialize_gpio_devices() 
@@ -50,20 +63,16 @@ async def test_hardware_manager_command_execution():
     }
 
     # Place commands onto the queue
-    manager.inboud_command_queue.put(command_on)
+    manager.inbound_command_queue.put(command_on)
      # Allow time for worker thread to pick up and execute both commands
     await asyncio.sleep(0.1) 
     assert mock_led.is_lit is True # Should be on after on command
 
-    manager.inboud_command_queue.put(command_off)
+    manager.inbound_command_queue.put(command_off)
     # Allow time for worker thread to pick up and execute both commands
     await asyncio.sleep(0.1) 
     assert mock_led.is_lit is False # Should be off after both on/off commands
 
-    # Assert specific method calls (if needed, but testing state is better with MockFactory)
-    # If you wanted to assert 'on' was called, you'd need to mock the LED *instance* if it didn't track calls.
-    # MockFactory pins track their value, so checking state is often sufficient.
-    
     # Clean up: stop the worker thread
     manager.stop_worker_thread()
 
@@ -74,29 +83,77 @@ async def test_hardware_manager_event_handling():
     Tests that gpiozero callbacks safely enqueue events to the async event queue.
     This simulates a button press on a mock button.
     """
-    manager = HardwareManager(async_loop=asyncio.get_event_loop())
+    # Local asyncio Queue just for this test to capture the callbacks
+    test_event_queue = asyncio.Queue()
+
+    manager = HardwareManager(
+        async_loop=asyncio.get_running_loop(),
+        publish_callback=test_event_queue.put_nowait, # Route callbacks into our test queue!
+        config=DUMMY_CONFIG
+    )
     manager.initialize_gpio_devices()
     manager.setup_gpio_callbacks() # This sets up when_pressed/when_released
 
     mock_button = manager.devices["button_27"]
     assert isinstance(mock_button, Button) # Verify it's a gpiozero.Button instance
 
-    # Store the expected event for later comparison
-    expected_event = {"device": "button_27", "event_type": "pressed", "timestamp": float} # Timestamp will be float, check type
-    
     # Simulate a button press using MockPin's drive_low method
-    # This directly simulates the electrical change that gpiozero would detect
     mock_button.pin.drive_low() 
-    await asyncio.sleep(0.1) 
 
-    # The event should now be in the async event_queue
-    received_event = await asyncio.wait_for(manager.outbound_event_queue.get(), timeout=1)
+    # Wait for the async loop to process the call_soon_threadsafe callback
+    # The event should now be inside our test_event_queue
+    received_event: DeviceStatePayload = await asyncio.wait_for(test_event_queue.get(), timeout=1)
 
-    assert received_event["device"] == expected_event["device"]
-    assert received_event["event_type"] == expected_event["event_type"]
-    assert isinstance(received_event["timestamp"], float) # Check timestamp type
+    # Assert against the Object properties, not dictionary keys
+    assert received_event.device == "button_27"
+    assert received_event.event == "pressed"
+    assert isinstance(received_event.timestamp, float) 
 
     # Simulate release
     mock_button.pin.drive_high()
-    received_release_event = await asyncio.wait_for(manager.outbound_event_queue.get(), timeout=1)
-    assert received_release_event["event_type"] == "released"
+    
+    received_release_event: DeviceStatePayload = await asyncio.wait_for(test_event_queue.get(), timeout=1)
+    assert received_release_event.event == "released"
+
+
+@pytest.mark.asyncio
+async def test_hardware_manager_blocks_private_method_access():
+    """
+    SECURITY TEST:
+    Verifies that the HardwareManager rejects any attempt to execute
+    methods or access properties that start with an underscore (e.g., __del__).
+    This prevents severe reflection vulnerabilities.
+    """
+    manager = HardwareManager(async_loop=asyncio.get_event_loop(), publish_callback=MagicMock(), config={})
+    
+    # We must mock the devices dictionary so it finds the device
+    mock_led = MagicMock()
+    manager.devices = {"led_17": mock_led}
+    
+    # Create an asyncio Future to capture the exception
+    future = asyncio.Future()
+
+    # 1. The Malicious Command (Trying to call a dunder method)
+    malicious_command = {
+        "device": "led_17",
+        "method": "__class__", # A classic Python reflection target
+        "args": [],
+        "kwargs": {},
+        "future": future
+    }
+
+    # 2. Execute the command directly (bypassing the queue for faster testing)
+    manager._execute_command(malicious_command)
+
+    # Allow the event loop to process the call_soon_threadsafe callback
+    await asyncio.sleep(0.01)
+
+    # 3. Assertions
+    # The Future MUST have an exception set on it
+    assert future.exception() is not None
+    
+    # The exception MUST be a PermissionError (or similar security error)
+    assert isinstance(future.exception(), PermissionError)
+    
+    # Check that the mock was never interacted with at all.
+    assert len(mock_led.mock_calls) == 0

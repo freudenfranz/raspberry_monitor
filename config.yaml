@@ -13,10 +13,11 @@ mqtt:
 
 # 2. Hardware Configuration (The prelude to Phase 4!)
 # This is what your HardwareManager will eventually read.
+# WARNING: This config prevents malicious users from creating arbitrary devices.
 devices:
   - name: "status_led"
     pin: 17
-    type: "LED"
+    type: "PWMLED"
     
   - name: "trigger_button"
     pin: 27

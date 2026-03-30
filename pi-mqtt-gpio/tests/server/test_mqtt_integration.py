@@ -30,7 +30,7 @@ async def test_mqtt_manager_publishes_to_real_broker(integration_config, event_q
     3. Pushes an event to the Manager.
     4. Verifies the TestClient receives it over the loopback network.
     """
-    # 1. Setup the System Under Test (SUT)
+    # Setup the System Under Test (SUT)
     manager = MQTTManager(event_queue=event_queue, config=integration_config)
     
     # Start the manager in the background
@@ -39,7 +39,7 @@ async def test_mqtt_manager_publishes_to_real_broker(integration_config, event_q
     # Allow a moment for the manager to connect
     await asyncio.sleep(0.1)
 
-    # 2. Setup the Observer (Test Client)
+    # Setup the Observer (Test Client)
     received_future = asyncio.get_running_loop().create_future()
 
     async def run_observer():
@@ -72,7 +72,7 @@ async def test_mqtt_manager_publishes_to_real_broker(integration_config, event_q
     )
     
     # Use the public gateway method
-    manager.publish_hardware_event(test_payload)
+    manager.publish_event(test_payload)
 
     # 4. Assertion: Wait for the network round-trip
     try:

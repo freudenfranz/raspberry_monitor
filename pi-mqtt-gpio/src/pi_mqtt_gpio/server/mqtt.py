@@ -13,10 +13,13 @@ import dataclasses
 import json
 import logging
 import queue
-from typing import Optional
-from pi_mqtt_gpio.server.models import BasePayload, DeviceStatePayload, MQTTMessage, SystemStatus, SystemStatusPayload, TelemetryPayload # Import our manager
+from typing import Callable, Optional
+from pi_mqtt_gpio.server.models import BasePayload, DeviceStatePayload, MQTTMessage, RPCResponsePayload, SystemStatus, SystemStatusPayload, TelemetryPayload # Import our manager
+from pi_mqtt_gpio.server.rpc_handler import RPCHandler
 # from pi_mqtt_gpio.server.security import CustomAuthenticator # Will be imported in Phase 5
 from aiomqtt import Client as MQTTClient, ProtocolVersion, Will
+from paho.mqtt.properties import Properties
+from paho.mqtt.packettypes import PacketTypes
 
 logger = logging.getLogger(__name__)
 
@@ -32,13 +35,15 @@ class MQTTManager:
     client_id: str
     status_topic: str
     telemetry_topic: str
-    
+    rpc_handler: Optional[object] 
+    _message_callbacks: Callable
+
     """
     Manages the lifecycle and configuration of the embedded AMQTT broker.
     """
     def __init__(self, event_queue: asyncio.Queue, config: dict):
         self.event_queue = event_queue
-        
+
         # Configuration extraction with defaults
         self.config = config
         mqtt_conf = self.config.get('mqtt', {})
@@ -55,6 +60,8 @@ class MQTTManager:
 
         # Internal state
         self._main_task: Optional[asyncio.Task] = None
+         # Add a list to hold incoming message callbacks
+        self._message_callbacks = [] 
 
     async def start(self):
         """
@@ -105,9 +112,13 @@ class MQTTManager:
                     logger.info(f"Connected to Mosquito Broker as {self.client_id}! Status: online")
 
                     
-                    # We run the publisher loop INSIDE the connection context
-                    # so it has access to the active client.
-                    await self._publisher_loop(client)
+                    # Run publisher loop INSIDE the connection context, so it has access to the active client.
+                    # Use asyncio.gather to run BOTH infinite loops at the same time
+                    logger.info("Starting publisher and listener tasks...")
+                    await asyncio.gather(
+                        self._publisher_loop(client),
+                        self._mqtt_listen_task(client)
+                    )
             
             except asyncio.CancelledError:
                 raise # Let the stop() method handle this
@@ -120,6 +131,9 @@ class MQTTManager:
         while True:
             # 1. Wait for an item from the event_queue
             event: DeviceStatePayload = await self.event_queue.get()
+            
+            topic = None
+            properties = None  # Default to no v5 properties
 
             if isinstance(event, DeviceStatePayload):
                 # 2. Extract data from the event dict
@@ -129,22 +143,43 @@ class MQTTManager:
                 topic = self.telemetry_topic # Use the configured telemetry topic
             elif isinstance(event, SystemStatusPayload):
                 topic = self.status_topic # Publish to the status topic defined in config
+            elif isinstance(event, RPCResponsePayload):
+                topic = event.response_topic # The RPC handler will set this dynamically based on the request's ResponseTopic property
+               
+                # aiomqtt properties dictionary
+                if event.correlation_data:
+                    # Instantiate it with the correct packet type
+                    properties = Properties(PacketTypes.PUBLISH)
+                    # Attach MQTT v5 properties specifically for RPC responses
+                    properties.CorrelationData = event.correlation_data
+                
             else:
                 # Handle unknown payloads
+                logger.warning(f"Unknown payload type dropped: {type(event)}")
+                self.event_queue.task_done()
                 continue
             
-            # amqtt expects the payload to be raw bytes so we need to convert our dict to JSON and then encode it
-            bytes_payload:bytes = event.to_bytes()
+            # Serialize and Publish
+            try: 
+                # amqtt expects the payload to be raw bytes so we need to convert our dict to JSON and then encode it
+                bytes_payload:bytes = event.to_bytes()
 
-            # 3. Use amqtt to publish
-            message = MQTTMessage(topic=topic, message=bytes_payload)
-            await client.publish(topic=message.topic, payload=message.message)
-            logger.debug(f"Published event to topic '{topic}': {event.to_json()}") 
+                # Use amqtt to publish
+                message = MQTTMessage(topic=topic, message=bytes_payload) # This is only for type checking
+                await client.publish(
+                    topic=message.topic, 
+                    payload=message.message, 
+                    properties=properties
+                )
+                logger.debug(f"Published event to topic '{topic}': {event.to_json()}") 
+            except Exception as e:
+                logger.error(f"Failed to publish message to '{topic}': {e}")
+            
+            finally:
+                # 4. Mark as done, ensuring the queue doesn't hang even if publish fails
+                self.event_queue.task_done()
 
-            # 4. Mark as done
-            self.event_queue.task_done()
-
-    def publish_hardware_event(self, payload: BasePayload):
+    def publish_event(self, payload: BasePayload):
         """   
         The public interface for sending any hardware fact or system log 
         to the outside world. This is part of our "Async/Sync Bridge" 
@@ -152,7 +187,7 @@ class MQTTManager:
         
         We are passing this as a callback to the HardwareManager, 
         which will call it from its worker thread whenever it has an event to report.
-        Make sure to use async_loop.call_soon_threadsafe(self.publish_hardware_event, event)
+        Make sure to use async_loop.call_soon_threadsafe(self.publish_event, event)
         
         Accepts a high-level Payload object and places it in the 
         internal queue for the background loop to process.
@@ -161,8 +196,34 @@ class MQTTManager:
         logger.debug(f"Request to publish: {payload}")
     
         # 2. Put the payload into the queue
-        # Make sure to use async_loop.call_soon_threadsafe(self.publish_hardware_event, event)
+        # Make sure to use async_loop.call_soon_threadsafe(self.publish_event, event)
         # to handle it!
         self.event_queue.put_nowait(payload)
   
+    # MQTT client listening for RCP commands and passing them to the RPCHandler            
+    async def _mqtt_listen_task(self, client:MQTTClient):
+        # Subscribe
+        await client.subscribe("pi/rpc/commands")
+        logger.info("Subscribed to pi/rpc/commands")
+        
+        async for message in client.messages:
+            # Shout to anyone listening!
+            for callback in self._message_callbacks:
+                # Run the callback in the background so it doesn't block the listener
+                # Pass the raw MQTT v5 properties and payload to the handlers
+                asyncio.create_task(
+                    callback(
+                        topic=str(message.topic), 
+                        payload=message.payload, 
+                        properties=message.properties
+                        )
+                )
+
+
+    # Registration method for incoming MQTT message callbacks (like the RPC handler)
+    def register_message_callback(self, callback_coroutine):
+        """Allows external classes to subscribe to incoming MQTT messages."""
+        self._message_callbacks.append(callback_coroutine)
+    
+    
     # You might want methods to expose config or status if needed
